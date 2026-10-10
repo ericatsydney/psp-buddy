@@ -1,0 +1,40 @@
+# Private backups and emulator data
+backups/
+**/backup/
+**/backups/
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*~
+**/SAVEDATA/
+**/PPSSPP_STATE/
+**/memstick/
+*.ppst
+*.ppst.*
+*.bin
+*.BIN
+
+# Game images must never be published
+*.iso
+*.ISO
+*.cso
+*.CSO
+*.chd
+*.CHD
+
+# Local secrets and generated output
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+dist/
+build/
+test-results/
+playwright-report/
