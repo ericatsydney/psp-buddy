@@ -188,6 +188,10 @@ Use test-driven development, project-appropriate static checks and tests, and wo
 
 ## 12. Review notes
 
+### Approved MVP test-path adjustment (2026-10-11)
+
+The user selected a fixed portable test runtime at `local/runtime/ppsspp-v1.20.4/app`, including its executable, memory stick, and chosen slot-2 state. The canonical portable bundle seeds the first trial; subsequent trials use the current test memory stick. Every trial still requires fresh complete verified original and portable save backups and a complete configuration snapshot while PPSSPP is closed. Preserve the previous owned runtime in a unique archive before rebuilding at the same active path; reject unknown runtime contents or mismatched backup roots. Verify originals and preserved snapshots after testing. Active test data may change and must never be copied back automatically. A stable executable path allows the user's firewall approval to apply to subsequent launches, subject to Windows policy; it does not grant screen-capture permission.
+
 The explicit defaults for median weapon strength, normalized resource cost, common-enemy baselines, and deterministic retry profiles make the implementation reproducible. They are proposed operational definitions of the approved strategy and can be adjusted during this written-spec review.
 
 The next step after user review is a separate implementation plan with exact files, meaningful failing tests, verification commands, and staged task scopes. This document does not authorize bypassing the remaining integration gates.

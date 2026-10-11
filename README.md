@@ -11,7 +11,7 @@ PSP Buddy is a planned autonomous play assistant for **Super Robot Wars Z2 Rebir
 
 ## Current status
 
-The project is in design and integration research. No autonomous runner has been implemented. Portable PPSSPP v1.20.4 has loaded the tested save state and normal in-game saves, and a direct API button press moved the cursor. Full game-state reading, reliable screen capture, and checkpoint automation still need validation.
+Implementation has started with a Python package, immutable observation/action contracts, configuration validation, a verified backup gate, local tactical rules, and an offline debugger adapter. The CLI lists `inspect`, `validate`, and `run`, but execution remains disabled until protected integration gates pass. See [development usage](docs/usage.md) for setup and supported instruction clauses. Portable PPSSPP v1.20.4 has loaded the tested save state and normal in-game saves, and a direct API button press moved the cursor. Trusted launch binding, full game-state reading, reliable screen capture, and checkpoint automation still need validation.
 
 The initial milestone is one autonomous battle from an existing save, with one working checkpoint slot, up to three retries, and automatic handover. See the [MVP design specification](docs/superpowers/specs/2026-10-10-autonomous-battle-mvp-design.md) and [integration research](docs/research/2026-10-10-hybrid-feasibility.md).
 

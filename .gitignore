@@ -38,3 +38,9 @@ dist/
 build/
 test-results/
 playwright-report/
+local/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+pytest-cache-files-*/

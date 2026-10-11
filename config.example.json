@@ -1,0 +1,19 @@
+{
+  "original_savedata": "local/original/PSP/SAVEDATA",
+  "original_states": "local/original/PSP/PPSSPP_STATE",
+  "portable_savedata": "local/portable/memstick/PSP/SAVEDATA",
+  "portable_states": "local/portable/memstick/PSP/PPSSPP_STATE",
+  "backup_root": "backups",
+  "debugger_endpoint": "ws://127.0.0.1:8080/debugger",
+  "emulator_path": "local/portable/PPSSPPWindows64.exe",
+  "iso_path": "local/game.iso",
+  "profile_path": "local/profile.json",
+  "game_id": "ULJS00460",
+  "patch_id": "english-v0.8",
+  "emulator_version": "1.20.4",
+  "slot": 2,
+  "max_retries": 3,
+  "timeout_seconds": 10,
+  "max_actions": 1000,
+  "max_transitions": 30
+}
