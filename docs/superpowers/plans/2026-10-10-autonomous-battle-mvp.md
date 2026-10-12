@@ -1,5 +1,59 @@
 # Autonomous Battle MVP Implementation Plan
 
+## Five-hour continuation, 2026-10-12
+
+Existing approved scope and no-commit rules continue. Baseline: 234 offline tests pass with
+`.\.venv\Scripts\python.exe -m pytest tests/unit -q -p no:cacheprovider --basetemp local/session-baseline-verified-20261012`.
+The restricted Windows sandbox denies access to pytest-created
+directories; approved unrestricted offline execution is required, as previously documented.
+
+- [x] Root: create `recognition.py` and `tests/unit/test_recognition.py`. First observe
+  missing-module and behavioral failures for synthetic image landmarks, unknown/ambiguous
+  screens, mismatched identity/dimensions/digest, and stale sequences. Implement evidence-bound
+  multi-landmark pixel matching with conservative thresholds and immutable results. This
+  classifies a screen only; it supplies no legal action, decoded text, phase, or tactical state.
+  Validate a private inspection profile against preserved Unit/Pilot/Mech captures, including
+  cross-screen rejection. Raw templates remain private. Fresh live recognition remains gated.
+- [x] Checkpoint agent: implement Task 6 offline contracts in `checkpoint.py` and its unit
+  tests, separating command acknowledgement, completion, artifact validation and restored
+  game observation. No live save/load adapter is assumed.
+- [x] Reaction agent: implement Task 8 pure rules in `reactions.py` and its unit tests,
+  requiring sequence-bound incoming context, legal choices and validated predictions.
+- [x] Root reviews each task before dependent integration. Then implement bounded supervision
+  with synthetic save-before-end-turn and retry scenarios if contracts pass review.
+  Files: `src/psp_buddy/supervisor.py`, `tests/unit/test_supervisor.py`, and
+  `tests/scenarios/test_battle.py`. Compose existing pure planner/reaction decisions with
+  injected trusted observation/execution/checkpoint adapters; keep CLI disabled. Startup
+  verifies the existing selected checkpoint without saving; every action consumes current
+  legal-action evidence. Save completion and unchanged fresh observation precede end-turn.
+  Defeat reload increments retries only after a verified fresh restore; successful enemy
+  phase resets budget. Test four failed attempts, failed saves/loads, no distinct reactions,
+  scripted departures, stop/cancellation cleanup, map completion, unknown choice, stale
+  observations and bounded no-progress. Run focused pytest red before implementation, then
+  complete pytest, Ruff and mypy before independent review.
+- [x] Run complete offline pytest, Ruff, strict mypy, CLI help and diff checks; independently
+  review tracked and intended untracked files. Record evidence and incomplete live gates.
+
+Native application automation is unavailable in this session. Do not launch PPSSPP for a
+menu-driven trial that cannot be observed and controlled through a supported interface.
+Any later live trial still requires fresh complete verified save/configuration backups.
+
+Continuation result: recognition has 25 synthetic tests and distinguishes the preserved
+Unit/Pilot/Mech reference captures while rejecting map/command captures. The preserved stat
+record was decoded again into a new ignored evidence file, preserving earlier evidence;
+HP 5000/5000, EN 121/210 and the corroborated defense/mobility/accuracy remain consistent.
+Checkpoint contracts have 51 tests, reaction rules 58, supervision 26, and the composed
+two-turn scenario passes. Shared model dialogue identity has three new rejection tests.
+The complete suite passes 398 tests. Ruff, strict mypy (16 source files), CLI help, expected
+live-run refusal and diff checks pass. Review fixes cover artifact-to-state binding, slot
+bounds, bounded protected paths, any allied defeat, scripted departures, repeated dialogue/
+reaction progress, missing roster members and unknown HP before retry reset. Final complete
+working-tree review passed after the checkpoint scripted-departure regression fix, with no
+remaining Critical or Important findings. No outstanding Minor code findings were reported;
+documented calibration/backend/deadline limitations remain. Live Tasks 4/6/7/10 gates remain
+unchecked. This completes the bounded offline session milestone, not autonomous battle
+acceptance. Changes remain uncommitted at HEAD `5a68ea4`.
+
 > **For agentic workers:** Execute task by task using bounded subagents with disjoint write scopes, reviewing each result before dependent work. The writing-plans skill names `superpowers:subagent-driven-development` or `superpowers:executing-plans`; neither is installed in this session. Follow the available global workflow instead, and disclose that substitution. Steps use checkboxes for tracking. Do not commit any files.
 
 **Goal:** Safely run one Super Robot Wars Z2 Rebirth English v0.8 battle from slot 2, using the approved local strategy, one working checkpoint, and at most three reload retries per checkpoint.

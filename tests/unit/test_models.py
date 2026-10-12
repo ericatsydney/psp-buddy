@@ -52,6 +52,14 @@ def test_policy_rejects_retry_budget_above_three() -> None:
         Policy(max_retries=4)
 
 
+@pytest.mark.parametrize("dialogue_id", ["", " ", 1])
+def test_dialogue_identity_is_unknown_or_nonempty_text(dialogue_id) -> None:
+    from psp_buddy.models import Snapshot
+
+    with pytest.raises(ValueError, match="dialogue"):
+        Snapshot(sequence=1, dialogue_id=dialogue_id)
+
+
 def test_unknown_collections_differ_from_observed_empty_collections() -> None:
     from psp_buddy.models import Affiliation, Snapshot, Unit
 

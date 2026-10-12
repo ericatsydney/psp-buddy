@@ -71,4 +71,65 @@ Images are fully decoded with [Pillow's image-loading API](https://pillow.readth
 
 The preserved Gundam 00 record matches its visible HP `5000/5000`, EN `121/210`, defense 1150, mobility 165 and accuracy 170. This API does not read emulator memory itself or produce a tactical snapshot. Evidence references are caller-supplied provenance, not automatically authenticated files. Pilot SP bindings, deployed roster, affiliation, coordinates and legal actions still need validation before autonomous play.
 
-The reader passed independent review with no Important or Critical findings. The complete offline suite has 234 passing tests, with Ruff and strict mypy also passing.
+The reader passed independent review with no Important or Critical findings. The 12 October
+continuation adds the offline contracts below; none enables autonomous CLI execution.
+
+## Conservative screen recognition
+
+`signature_from_frame(frame, label, screen, boxes, evidence_ids)` builds an immutable signature
+from at least two nonoverlapping, nonuniform landmarks. `ScreenRecognizer(game_id, trial_id,
+size, signatures)` consumes only intact matching-identity frames with increasing sequences.
+Every landmark must meet the conservative pixel-error threshold; unknown and ambiguous
+screens return `Screen.UNKNOWN`. The result carries the frame digest, sequence and evidence
+references, with no decoded text, phase, unit identity, or legal-action claims.
+
+Private calibration distinguishes the preserved Unit/Pilot/Mech information screens and
+rejects the preserved map and command menus. These are reference-frame and cross-screen
+checks, not held-out or fresh live validation. Changed stats, rendering or layout may produce
+unknown results. Evidence references are caller-supplied provenance; signature selection must
+be separately reviewed before use. Production screen/menu profiles remain a live gate.
+
+## Offline checkpoints and supervision
+
+`VerifiedCheckpointService(slot, game_id, map_id, backend, state_root=...)` binds one user-facing
+slot (1–5), reads only within the configured protected state root, and caps artifacts at
+128 MiB. `verify_initial_checkpoint(snapshot, state_path)` adopts a selected existing state
+without issuing save/load commands. Save/load receipts require correlated completion,
+complete decoded artifact metadata, SHA-256 integrity, a matching tactical-state fingerprint,
+and fresh matching observation. The backend must establish these from real emulator/state
+evidence; no live backend or PPSSPP state decoder is implemented. A fingerprint is an
+in-process comparison contract, not a field in a PPSSPP state header.
+
+`current_snapshot` returns the last checkpoint observation. `can_end_turn` accepts only the
+current issuer receipt and that observed state after completed allied actions. On uncertain
+completion, the previous receipt remains available for handover, while further operations
+are disabled. This does not prove that the prior on-disk state survived a failed save; supported
+undo/recovery behavior still needs protected validation. Synchronous filesystem operations
+cannot be preempted; bounded reads and explicit deadline checks fail closed when they return.
+
+`BattleSupervisor` composes trusted injected observers, executors and checkpoint services with
+the existing pure planners. It verifies startup, saves before ending a player turn, counts a
+retry only after successful fresh restoration, and prevents replay of allied actions during
+enemy-phase retries. A successful enemy phase resets the budget; four failed attempts exhaust
+the default initial-plus-three-retries allowance. Unknown choices/state, missing allies without
+departure/defeat evidence, no progress, timeouts, budgets and user stop cause handover.
+
+Reaction inputs require `IncomingAttack` evidence tied to the observation, checkpoint and attack
+occurrence. Retry estimates are validated survival scores, not guarantees. Failed reactions
+are recorded by contextual attack identity. Consecutive attacks can advance without changing
+HP, while repeated unchanged occurrence evidence does not establish progress. Decision-free
+dialogue additionally requires a reviewed `Snapshot.dialogue_id` identifying its content or
+script position; an increasing frame sequence alone cannot justify another skip.
+
+The executor remains an injected integration contract. Its `cleanup()` must release injected
+controls and return the known pause status; failure is reported with unknown pause state.
+No production menu executor, live checkpoint backend, or autonomous runner is available.
+
+The synthetic two-turn scenario composes the actual checkpoint, tactical, reaction and
+supervisor services with an offline world. It verifies one working slot, save-before-end-turn,
+reaction-only retry, successful-phase reset and map-clear handover. It does not validate game
+menus or actual PPSSPP state parsing. No emulator trial was performed on 12 October; native
+application control was unavailable in this session.
+
+Verification on 12 October: 398 offline tests pass, Ruff `check .` and strict mypy `src`
+pass, CLI help works and `run` refuses execution as expected. All changes remain uncommitted.

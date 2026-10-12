@@ -143,3 +143,58 @@ All six private images and record samples are under the successful trial's `evid
 The inspection-only decoder was exercised offline against `records-5-08E90000.bin` from protected trial `20261011T122349407119Z-94a95f7edddb49f88cc791eaf5499f09`, selecting the 0x50-byte record at 0x08E93A60. Record SHA-256: `b7d938eca4ad3b0934f6900b0979d4ac30ec82d1ed586634a77d4dbf1806341b`.
 
 Decoded HP 5000/5000, EN 121/210, defense 1150, mobility 165 and accuracy 170 match the preserved mech-info screen. The user explicitly confirmed the HP numerator is current HP and denominator is maximum HP. Private `inspection-result.json` records the result and unavailable tactical fields. This is one corroborated unit record, not a deployed-roster or autonomous-battle validation. All 234 offline tests, Ruff and strict mypy passed; no emulator or save was changed by this offline check.
+
+## Offline recognition and safety continuation, 2026-10-12
+
+The clean repository resumed at `5a68ea4`. All 234 baseline tests passed with an explicitly
+approved unrestricted offline invocation because the Windows sandbox denies access to
+Python-created pytest directories. No production checks were bypassed or weakened.
+
+`recognition.py` adds immutable multi-landmark signatures and results. It verifies image
+digest/format/dimensions, game/trial identity and increasing sequence; every landmark must
+match within a conservative reviewed threshold. Unknown/ambiguous matches remain unknown.
+Private calibration uses two nonoverlapping areas on the visually reviewed Unit/Pilot/Mech
+screens from trial `20261011T122349407119Z-94a95f7edddb49f88cc791eaf5499f09`.
+All three references classify distinctly, and the map plus both command-menu captures are
+rejected. This is calibration and cross-screen rejection, not fresh/held-out recognition.
+It supplies no OCR, unit identity, phase, legal action or tactical snapshot.
+
+The private report is `local/recognition-evidence-20261012.json`; 25 synthetic recognition
+tests cover stale/invalid frames, signature constraints, ambiguous matches, multiple-landmark
+requirements and numerical error boundaries. The preserved record was independently
+decoded again into `local/inspection-result-20261012.json`, leaving prior snapshot evidence
+unchanged. Its record hash remains `b7d938eca4ad3b0934f6900b0979d4ac30ec82d1ed586634a77d4dbf1806341b`;
+HP 5000/5000, EN 121/210, defense 1150, mobility 165 and accuracy 170 remain corroborated.
+No pilot SP, active-roster, coordinate, affiliation or prediction binding was promoted.
+
+Offline checkpoint contracts now correlate request/completion, complete artifact decoding,
+SHA-256 and tactical-state fingerprint with a fresh observation. One selected slot uses an
+issuer-owned receipt; initial adoption sends no save/load commands. Artifact paths stay
+inside a required protected root and reads are capped at 128 MiB. A failed/uncertain operation
+retains the prior receipt for handover and disables reuse, without claiming on-disk rollback.
+No real PPSSPP state parser or save/load control was supplied.
+
+Pure reaction rules and supervision cover strict 80%/50% boundaries, validated legal choices,
+contextual failed-reaction history, successful-load-only retry increments and successful-phase
+reset. The composed synthetic two-turn battle saves before end-turn, retries one enemy phase
+without replaying player actions, changes its reaction, retains slot 2, then hands over at
+map clear. Separate tests exhaust the initial attempt plus three retries, block end-turn on
+failed save, and check choices, roster uncertainty, stop/cancellation, cleanup and no-progress.
+Consecutive dialogue/zero-damage attack prompts need explicit dialogue/occurrence evidence;
+fresh capture identity alone cannot establish their progress.
+
+Verification: 398 offline tests pass, Ruff `check .`, strict mypy `src` (16 source files), CLI
+help and diff checks pass. A CLI `run` invocation returns the expected disabled-capability
+error. Versions: Python 3.14.3, pytest 9.1.1, Ruff 0.17.0, mypy 2.4.0, Pillow 12.3.0,
+websockets 17.2. Independent reviews fixed blocking checkpoint/reaction and progress findings;
+the complete final working-tree review is recorded in the implementation plan.
+
+Remaining Minor limitation: synchronous filesystem work and an uncooperative injected backend
+cannot be preempted immediately; finite size bounds and explicit deadlines fail closed after
+return. Fingerprints are in-process contracts rather than durable PPSSPP metadata. Templates
+can reject changed rendering/stats, and local provenance is supplied by the reviewed caller.
+
+No PPSSPP process was launched or controlled in this continuation. Native application control
+was unavailable, so there was no safe supported menu-driven live trial. Fresh capture/menu
+recognition, complete coherent battle reading, live selected-slot save/load/undo, menu executor
+and one-map acceptance remain unpassed gates. The CLI remains disabled; changes are uncommitted.

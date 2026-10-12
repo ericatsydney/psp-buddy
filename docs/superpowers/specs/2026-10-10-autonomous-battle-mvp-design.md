@@ -70,6 +70,14 @@ Only make a decision when its required fields are validated and current. Use a v
 
 Memory profiles are keyed to the tested game/patch identity and validated at runtime. Do not use temporary stack copies as persistent unit records. Confirm record identity and layout across different units, map phases, and reloads.
 
+Implementation contract clarification (12 October): recognition results carry frame sequence,
+digest and evidence references but do not establish tactical state. Validated decision-free
+dialogue needs a content/script-position identity for progress checks; consecutive reaction
+prompts need incoming-attack context and occurrence identity. Fresh captures alone are not
+proof of action completion. Checkpoint artifact decoding must reconstruct the expected
+tactical state before a receipt permits end-turn; request acknowledgement and an unchanged
+live screen cannot establish that an old state file contains the new checkpoint.
+
 ## 6. Player-turn strategy
 
 ### Healing and retreat

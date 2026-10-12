@@ -157,10 +157,17 @@ class Snapshot:
     scripted_departure_ids: tuple[str, ...] = ()
     map_complete: bool | None = None
     paused: bool | None = None
+    # Evidence-bound identity of recognized decision-free dialogue content/position.
+    # A fresh capture alone cannot prove that skipping advanced the dialogue.
+    dialogue_id: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.sequence) is not int or self.sequence < 0:
             raise ValueError("invalid snapshot sequence")
+        if self.dialogue_id is not None and (
+            not isinstance(self.dialogue_id, str) or not self.dialogue_id.strip()
+        ):
+            raise ValueError("invalid dialogue identity")
         if self.legal_actions is not None and any(
             action.snapshot_sequence != self.sequence for action in self.legal_actions
         ):
