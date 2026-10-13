@@ -8,6 +8,46 @@ SUPPORTED_STATS = frozenset({
 })
 
 
+@dataclass(frozen=True)
+class PilotInspectionProfile:
+    """Named evidence window only; pilot_label is not a deployed-pilot identity."""
+    game_id: str
+    patch_id: str
+    emulator_version: str
+    pilot_label: str
+    record_window: str
+    record_address: int
+    record_size: int
+    fields: tuple['FieldBinding', ...]
+
+    def __post_init__(self) -> None:
+        for value in (self.game_id, self.patch_id, self.emulator_version,
+                      self.pilot_label, self.record_window):
+            if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+                raise ValueError('Bounded nonempty identity and window labels required')
+        _integer(self.record_size, 1, 65536, 'pilot record size')
+        _integer(self.record_address, 0x08800000, 0x0A000000 - self.record_size,
+                 'PSP user RAM pilot record address')
+        if not isinstance(self.fields, tuple):
+            raise ValueError('Immutable field tuple required')
+        names: set[str] = set()
+        occupied: set[int] = set()
+        for field in self.fields:
+            if not isinstance(field, FieldBinding):
+                raise ValueError('Field binding required')
+            if field.name not in {'sp', 'max_sp', 'level', 'will'}:
+                raise ValueError('Unsupported pilot stat field')
+            positions = set(range(field.offset, field.offset + field.width))
+            if field.name in names or occupied & positions:
+                raise ValueError('Duplicate or overlapping pilot field binding')
+            if field.offset + field.width > self.record_size:
+                raise ValueError('Pilot field exceeds record bounds')
+            names.add(field.name)
+            occupied.update(positions)
+        if not {'sp', 'level'} <= names:
+            raise ValueError('Corroborated current SP and level required')
+
+
 def _integer(value: int, minimum: int, maximum: int, name: str) -> None:
     if type(value) is not int or not minimum <= value <= maximum:
         raise ValueError(f"Invalid {name}")

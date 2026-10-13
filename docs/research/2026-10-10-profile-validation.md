@@ -198,3 +198,60 @@ No PPSSPP process was launched or controlled in this continuation. Native applic
 was unavailable, so there was no safe supported menu-driven live trial. Fresh capture/menu
 recognition, complete coherent battle reading, live selected-slot save/load/undo, menu executor
 and one-map acceptance remain unpassed gates. The CLI remains disabled; changes are uncommitted.
+
+## Fresh protected observation and pilot inspection, 2026-10-13
+
+Resumed from the user's committed `6ac276b`. Supported Windows Computer Use became available.
+Every trial took fresh complete original/portable save and configuration snapshots, verified
+SHA-256 copies before launch, preserved prior runtimes, closed its owned emulator and checked
+originals/snapshots afterward. An app-access timeout sent no menu input. OpenGL debugger
+output capture failed with `Could not download output`, including after a displayed frame.
+The latter trial reported an existing UI/CPU pause; the input guard stopped before game input.
+The cause of that pause is not established. Those failures remain preserved evidence.
+
+D3D11 protected trial `20261013T120643946751Z-15f21fe525cc490e8f5767bbb5986b90`
+captured seven visually inspected frames through Debug → Take screenshot and navigated only
+the command/Unit/Pilot/Mech information menus. Every observation restored running CPU/UI
+status and every bounded controller input acknowledged release. No unit action, battle,
+save/load or RAM write occurred; final source-preservation checks passed.
+
+The reviewed pilot reader decoded all seven fresh samples to Setsuna SP **55/95**, level
+**36**, will **150**, matching both Pilot captures. The named inspection window is
+`0x08EAA040` with size `0x50`; SP uses unsigned u16 at offset `0x3C`, maximum SP u16 at
+`0x1C`, level u8 at `0x46`, will u16 at `0x3E`. The complete sampled 0x1000-byte region hash
+was `a1e6938d0c0a8acebfe0bfd4bc23bd8bd821cd9c3424357942435252e6496013` each time.
+This is a stationary named fixture, not a discovered pilot record base/stride, deployed ID,
+roster or cross-map binding. Missing optional fields remain unknown. Private verification
+report: `local/pilot-reader-verification-20261013.json`.
+
+Unchanged broad v1 screen landmarks rejected all four fresh information frames. Recalibration
+v2 uses static tabs/labels excluding animated backgrounds and stat values, with the unchanged
+mean-error limit 2. Development frames classify Unit/Pilot/Mech distinctly; map/command frames
+remain unknown. The frozen private descriptor is `local/static-landmarks-v2-20261013.json`.
+Separate held-out acceptance is required; development tuning alone does not pass that gate.
+
+Separate protected trial `20261013T122746277660Z-523bda9354a74a4d9032f1c875fc5652`
+then passed the unchanged frozen v2 profile: steps 3/4/5 classified Unit/Pilot/Mech and
+steps 0/1/2 (map/command menus) remained unknown. Descriptor SHA-256 was
+`6e22d1b39e247d9abcfc05ab406a1c3e5f84ff0b8fabb3835a232e9976a0e4b2` before evaluation.
+All six additional pilot samples decoded 55/95, level 36 and will 150, matching its Pilot
+screen. CPU/UI status remained running after every observation; releases acknowledged.
+The owned process closed and original/snapshot/archive checks passed. This is independent
+launch validation of the same fixture/rendering, not broad battle recognition. The private
+report `local/static-landmarks-holdout-20261013.json` preserves frame/sample hashes.
+
+The bounded generic executor and offline CLI also passed independent review. A composed
+synthetic scenario now uses the real executor, supervisor, checkpoint service and pure planners.
+`validate` reports capabilities, `inspect` decodes explicitly supplied records, and `run`
+refuses unmet live gates. Offline provenance is supplied, not authenticated. No production
+menu recipes, live checkpoint backend or standalone capture trigger is enabled.
+
+Verification checkpoint: **545 offline tests** pass; Ruff `check .` and strict mypy `src`
+(19 source files) pass. The local wheel build passed after installing the declared setuptools
+build dependency. Final wheel build passed with SHA-256
+`558fccb417140b142ee908247c5422fa47e2a419cbfc78abee2fcb03cbf504ae`.
+Independent final tracked/untracked working-tree review found no Critical or Important
+findings. Minor stale documentation statements were corrected. Remaining limitations are
+caller-supplied provenance, storage-width rather than calibrated game-specific pilot bounds,
+synchronous operations that cannot be preempted, and recipes/attack contexts that require
+reviewed originating evidence. None authorizes live tactics. Changes remain uncommitted.

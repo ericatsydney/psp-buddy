@@ -268,7 +268,7 @@ class Launcher:
                 or endpoint.path != "/debugger" or endpoint.query or not endpoint.port):
             raise ValueError("unsupported debugger endpoint")
         if graphics_backend is not None and (
-                type(graphics_backend) is not int or graphics_backend != 0):
+                type(graphics_backend) is not int or graphics_backend not in (0, 2)):
             raise ValueError("unsupported graphics backend")
         pattern = re.escape(config.game_id) + r"_\d+\.\d+_" + str(config.slot - 1) + r"\.ppst"
         if not re.fullmatch(pattern, state_filename):

@@ -179,6 +179,21 @@ def test_stop_releases_controls_without_checkpoint_requests():
     assert not executor.actions and not checkpoint.events
 
 
+@pytest.mark.parametrize("reason", ["user_stop", "unknown_dialogue", "unexpected_choice"])
+def test_executor_handover_reason_is_preserved(reason):
+    from psp_buddy.executor import ExecutionError
+
+    executor = Executor([])
+    async def fail(action, before):
+        raise ExecutionError(reason)
+    executor.execute = fail
+    supervisor = BattleSupervisor(Observer([battle()]), executor, Checkpoints(),
+                                  Policy(), Path("state.ppst"))
+    result = asyncio.run(supervisor.run())
+    assert result.reason == reason
+    assert executor.cleaned
+
+
 def test_unknown_dialogue_not_skipped():
     result, executor, _ = run([battle(screen=Screen.DIALOGUE)], [])
     assert result.reason == "initial_checkpoint_failed"

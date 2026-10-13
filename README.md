@@ -6,12 +6,18 @@ PSP Buddy is a planned autonomous play assistant for **Super Robot Wars Z2 Rebir
 
 - Load and save progress using PPSSPP's existing save-state features, with support for starting from normal in-game saves.
 - Read the current game state, including robot specifications, pilot statistics, map information, and battle status.
-- Make tactical decisions, perform battle actions, skip dialogue, and progress to subsequent maps according to user instructions.
-- Pause and request user assistance when an allied robot is defeated or another configured stop condition occurs.
+- Make tactical decisions, perform battle actions, and skip positively recognized decision-free dialogue.
+- Retry confirmed allied defeats from one verified checkpoint, with at most three reloads, then hand over on map completion or a safety stop.
 
 ## Current status
 
-The Python package includes protected launch/debugger/capture services, a corroborated single-unit stat reader, conservative screen classification, local tactical and reaction rules, offline single-slot checkpoint contracts, and a bounded safety supervisor. Synthetic scenarios exercise save-before-end-turn, reaction-only retries, and map-clear handover. The CLI lists `inspect`, `validate`, and `run`, but execution remains disabled until protected integration gates pass. See [development usage](docs/usage.md) for setup and supported instructions. Portable PPSSPP v1.20.4 has loaded the tested saves, produced inspected screenshots, and moved the cursor by one tile. Full roster/tactical decoding, unattended capture triggering, live save/load, and menu execution remain unverified.
+The Python package includes protected launch/debugger/capture services, bounded robot and pilot inspection readers, conservative screen classification, local tactical and reaction rules, offline single-slot checkpoint contracts, a generic bounded action executor, and a safety supervisor. A synthetic two-turn scenario composes the actual executor and checkpoint services to exercise save-before-end-turn, reaction-only retries, budget reset, and map-clear handover.
+
+The CLI supports read-only `validate` capability reports and offline `inspect --record` decoding. These commands use supplied local files; they do not launch PPSSPP, connect to its debugger, save, or send game input. `run` remains disabled. See [development usage](docs/usage.md) for commands, profile format, and supported instructions.
+
+Portable PPSSPP v1.20.4 has loaded tested saves, produced inspected screenshots through supported Windows menu control and the screenshot collector, and moved the cursor by one tile. Named pilot SP, maximum SP, level and will match fresh visible screens. Static information-screen anchors passed a separate protected launch of the same fixture, while map and command menus remained unknown. Named-unit/pilot inspection does not establish a complete tactical snapshot. Full roster/tactical decoding, unattended capture triggering, live save/load, production menu recipes, and autonomous battle acceptance remain unverified.
+
+Verification on 13 October 2026: 545 offline tests pass; Ruff `check .` and strict mypy `src` pass. Passing these checks does not enable autonomous play.
 
 The initial milestone is one autonomous battle from an existing save, with one working checkpoint slot, up to three retries, and automatic handover. See the [MVP design specification](docs/superpowers/specs/2026-10-10-autonomous-battle-mvp-design.md) and [integration research](docs/research/2026-10-10-hybrid-feasibility.md).
 

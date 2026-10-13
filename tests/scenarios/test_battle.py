@@ -11,6 +11,15 @@ from psp_buddy.checkpoint import (
     VerifiedCheckpointService,
     checkpoint_state_fingerprint,
 )
+from psp_buddy.executor import (
+    ActionRecipe,
+    ActionSelection,
+    BoundedExecutor,
+    ExecutionObservation,
+    ExpectedContext,
+    RecipeBinding,
+    RecipeStep,
+)
 from psp_buddy.models import (
     Action,
     ActionKind,
@@ -142,3 +151,84 @@ def test_two_turn_battle_retries_reactions_without_replaying_allied_actions(tmp_
     ]
     assert result.checkpoint.slot == 2
     assert len(result.history) == 8
+
+
+class MenuWorldAdapter:
+    """Synthetic calibrated contexts, not actual PSP menu commands or recognition."""
+
+    def __init__(self, world):
+        self.world = world
+        self.selection = None
+        self.release_count = 0
+
+    async def observe(self):
+        snapshot = await self.world.observe()
+        return ExecutionObservation(snapshot, snapshot.screen.value, self.selection,
+                                    "synthetic-reviewed-menu", True,
+                                    attack_context_id=(f"turn-{snapshot.turn}-attack-0"
+                                                       if snapshot.screen is Screen.REACTION
+                                                       else None))
+
+    async def send(self, command):
+        kind = ActionKind(command.removeprefix("synthetic:"))
+        action = next(a for a in self.world.snapshot.legal_actions if a.kind is kind)
+        await self.world.execute(action, self.world.snapshot)
+        self.selection = None
+
+    async def release_all(self):
+        self.release_count += 1
+        self.world.cleaned = True
+        return False
+
+    def recipes(self, action, before):
+        self.selection = ActionSelection.from_action(action)
+        context = ExpectedContext(before.screen, before.phase, before.screen.value,
+                                  self.selection,
+                                  attack_context_id=(f"turn-{before.turn}-attack-0"
+                                                     if before.screen is Screen.REACTION else None))
+        if action.kind is ActionKind.WAIT:
+            screen, phase = Screen.MAP, Phase.PLAYER
+        elif action.kind is ActionKind.END_TURN:
+            screen, phase = Screen.REACTION, Phase.ENEMY
+        elif not self.world.failed_once:
+            screen, phase = Screen.MAP, Phase.ENEMY
+        elif before.turn == 1:
+            screen, phase = Screen.MAP, Phase.PLAYER
+        else:
+            screen, phase = Screen.MAP_CLEAR, Phase.ENEMY
+        expected = ExpectedContext(screen, phase, screen.value, None,
+                                   attack_context_id=(f"turn-{before.turn}-attack-0"
+                                                      if screen is Screen.REACTION else None))
+        def step_postcondition(first, after, planned):
+            return after.snapshot.screen is screen and after.snapshot.phase is phase
+        def final_postcondition(first, after, planned):
+            if planned.kind is ActionKind.WAIT:
+                return after.units[0].action_available is False
+            if planned.kind is ActionKind.END_TURN:
+                return after.phase is Phase.ENEMY and after.screen is Screen.REACTION
+            return (bool(after.confirmed_defeated_ids) or after.map_complete is True
+                    or after.phase is Phase.PLAYER and after.turn > first.turn)
+        step = RecipeStep(f"synthetic:{action.kind.value}", context, expected,
+                          "synthetic-reviewed-step", step_postcondition)
+        return ActionRecipe(action, RecipeBinding.from_snapshot(before), (step,),
+                            "synthetic-reviewed-recipe", True, final_postcondition)
+
+
+def test_actual_bounded_executor_composes_with_checkpoint_retries_and_supervisor(tmp_path):
+    world = World(tmp_path / "working.ppst")
+    adapter = MenuWorldAdapter(world)
+    executor = BoundedExecutor(adapter, adapter.recipes)
+    checkpoint = VerifiedCheckpointService(2, "game", "map", world, state_root=tmp_path)
+    supervisor = BattleSupervisor(world, executor, checkpoint, Policy(), world.path,
+                                  incoming_attack=world.incoming, max_actions=20,
+                                  max_observations=30)
+    result = asyncio.run(supervisor.run())
+    assert result.reason == "map_complete"
+    assert result.retry_count == 0
+    assert len(result.history) == 8
+    assert adapter.release_count == 9  # Every action plus final supervisor cleanup.
+    assert world.events == [
+        ("wait", 1), ("save", 2), ("end_turn", 1), ("defend", 1), ("load", 2),
+        ("end_turn", 1), ("evade", 1), ("wait", 2), ("save", 2),
+        ("end_turn", 2), ("defend", 2),
+    ]

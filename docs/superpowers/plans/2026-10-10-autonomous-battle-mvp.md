@@ -1,5 +1,92 @@
 # Autonomous Battle MVP Implementation Plan
 
+## Five-hour continuation, 2026-10-13
+
+Start from clean `6ac276b`; the previous session's changes are committed by the user.
+Existing written design/implementation approval and no-auto-commit rules continue.
+Supported `@oai/sky` initialized successfully and listed current windows; PPSSPP was absent.
+The prior native-control limitation must not be assumed to persist.
+
+WIP resume: the first protected discovery timed out at native app approval and preserved
+all originals/snapshots. An OpenGL debugger capture trial rejected output; a subsequent
+display-ready trial obtained a built-in screenshot but debugger readback still failed and
+reported paused UI/CPU state. Its input guard stopped before any game input. All owned
+processes closed and preservation checks passed. Resume pilot discovery with the previously
+validated D3D11 renderer: `Launcher.prepare(graphics_backend=2)` changes only the newly
+backed-up trial configuration. Tests first establish source/config-snapshot preservation and
+rejection of unvalidated renderer values; review and full offline checks precede live launch.
+Capture/profile work remains the priority; generic executor and offline CLI work is retained.
+
+Fresh D3D11 trial `20261013T120643946751Z-15f21fe525cc490e8f5767bbb5986b90`
+closed successfully after seven captures and bounded information-menu navigation only.
+Originals, snapshot configuration and archived runtime verified unchanged. Unit/Pilot screens
+corroborate named Setsuna SP 55, level 36 and will 150 against fresh pilot-region reads at
+`0x08EAA07C`, byte `0x08EAA086` and `0x08EAA07E`. Maximum SP 95 matches u16 at
+`0x08EAA05C`. All seven pilot-region samples agree; this is one named fixture,
+not deployed-pilot identity, roster or cross-map validation.
+
+- [x] Bounded pilot reader: add immutable `PilotInspectionProfile` in `profile.py` and
+  `decode_pilot_inspection` in `reader.py`, with `tests/unit/test_pilot_reader.py`. Reuse
+  evidence-bound unsigned field layouts, identity/span/overlap validation; require SP and
+  positive level, allow only SP/max-SP/level/will, leave unvalidated optional maxima absent.
+  Test malformed bindings, identity/bytes mismatch, invalid level and supplied max-SP bounds
+  red before implementation. This never creates a tactical snapshot or guesses pilot identity.
+  Root verifies decoding offline against preserved fresh samples after independent review.
+- [x] Recognition continuation: unchanged v1 broad landmarks rejected all four fresh info
+  frames. Preserve that failure evidence. Calibrate static UI anchors that exclude animated
+  background/stat values, preserving strict thresholds and unknown/ambiguous behavior.
+  Distinguish recalibration from new held-out validation; run a separate freshly backed-up
+  trial for frozen-profile acceptance if needed. Keep templates/raw assets private.
+
+- [ ] Root: protected capture/profile discovery, sequentially. Read current launcher/trial
+  helpers, confirm emulator closed, create fresh complete SHA-256-verified original/portable
+  save and configuration snapshots, then launch through the owned-session gate. Use supported
+  Sky APIs for observed Windows menu actions and the debugger for allowlisted game input and
+  coherent read-only RAM samples. Correlate named-unit pilot/resource fields with freshly
+  inspected screens; do not guess roster/phase/legal-action data. Investigate a documented
+  unattended capture trigger before claiming a standalone bridge. Close the owned process
+  and verify originals, snapshots and archived runtime after every trial.
+- [x] Executor agent: `src/psp_buddy/executor.py`, `tests/unit/test_executor.py` only.
+  Implement Task 7's generic bounded transition engine with immutable evidence-bound action
+  recipes and injected observation/input adapters. Require identity, fresh legal-action
+  membership, expected screen/menu context and explicit per-step/postcondition evidence.
+  Tests cover move/attack, Repair, Trust, wait/end-turn, reactions, decision-free dialogue,
+  choices/map-clear, stale evidence, timeout/no-progress, stop/cancellation and release cleanup.
+  No guessed production menu sequences; live recipes remain disabled until gates pass.
+- [x] CLI agent: `src/psp_buddy/cli.py`, `src/psp_buddy/inspection_io.py`,
+  `src/psp_buddy/__main__.py`, `tests/unit/test_cli.py`, `tests/unit/test_inspection_io.py` only.
+  Implement read-only `validate --config [--instructions-file]` capability reports and offline
+  `inspect --config --record` for bounded inspection-profile JSON and supplied record bytes.
+  Missing `--record` cannot silently launch/connect. Strict descriptor identity/type/bounds,
+  duplicate JSON keys and unsupported tactical profile claims fail closed. Distinguish supplied
+  provenance/calibration from authenticated live evidence. `run` remains refused. Tests prove
+  no live imports/connections/save/input, invalid configs/policies/records and useful JSON reports.
+- [x] Root reviews both tasks before integration; fix blocking findings, add a composed
+  executor/supervisor scenario, run full pytest, Ruff, strict mypy, package/build and CLI checks,
+  independently review tracked/untracked working-tree files and preserve private evidence.
+- [x] Update this plan, usage/README and research with exact results and remaining gates.
+
+All pytest fixtures use unique ignored `local/` basetemp directories and `-p no:cacheprovider`;
+known Windows sandbox directory restrictions may require approved unrestricted offline runs.
+Use existing verification commands from the plan. No automatic commit, push, RAM write,
+original-save restoration, trial-save copying back or live autonomous runner enablement.
+
+13 October acceptance checkpoint: the reviewed reader matches all seven development and
+six held-out pilot samples (SP 55/95, level 36, will 150). Protected held-out trial
+`20261013T122746277660Z-523bda9354a74a4d9032f1c875fc5652` classified Unit/Pilot/Mech
+with the unchanged frozen static profile and rejected all three map/command frames.
+Descriptor SHA-256: `6e22d1b39e247d9abcfc05ab406a1c3e5f84ff0b8fabb3835a232e9976a0e4b2`.
+CPU/UI resumed after every observation, input releases acknowledged, owned PPSSPP closed,
+and final originals/snapshots/archive preservation checks passed. This validates only the
+same named fixture/rendering configuration across independent launches. Standalone capture,
+complete tactical observation, live checkpoints and production menu execution remain WIP.
+All 545 offline tests, Ruff and strict mypy pass; pilot/executor/CLI reviews have no blocking
+findings. Final wheel build and independent whole-working-tree review passed; Minor stale
+documentation claims corrected. `validate` and supplied-record `inspect` demonstration passed;
+`run` refused live execution. Private evidence/config/game assets remain ignored. All new
+work is uncommitted. Root discovery remains incomplete for unattended capture and complete
+tactical bindings; this checkpoint does not pass the one-map autonomous acceptance gate.
+
 ## Five-hour continuation, 2026-10-12
 
 Existing approved scope and no-commit rules continue. Baseline: 234 offline tests pass with

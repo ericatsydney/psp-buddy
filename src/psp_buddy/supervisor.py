@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol, TypeVar
 
 from .checkpoint import checkpoint_state_fingerprint
+from .executor import ExecutionError
 from .models import (
     Action,
     ActionKind,
@@ -315,6 +316,8 @@ class BattleSupervisor:
             reason, affected = stop.reason, stop.affected
         except asyncio.CancelledError:
             reason = "user_stop"
+        except ExecutionError as exc:
+            reason = exc.reason
         except ConnectionError:
             reason = "connection_lost"
         except Exception:

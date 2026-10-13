@@ -97,6 +97,29 @@ def test_isolated_configuration_and_one_use_claim(prepared_env):
         launcher.start(prepared)
 
 
+def test_selected_d3d11_backend_changes_only_verified_trial_configuration(prepared_env):
+    launcher, config, system, inspector, process = prepared_env
+    source = (system / 'ppsspp.ini').read_bytes()
+    prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                                system_root=system, graphics_backend=2)
+    assert (system / 'ppsspp.ini').read_bytes() == source
+    assert (prepared.receipt.snapshot_root / 'SYSTEM' / 'ppsspp.ini').read_bytes() == source
+    assert 'GraphicsBackend = 2' in (prepared.memstick_root / 'PSP' / 'SYSTEM' /
+                                   'ppsspp.ini').read_text()
+    session = launcher.start(prepared)
+    session.close()
+    session.verify_sources()
+
+
+@pytest.mark.parametrize('backend', [True, 1, 3, -1])
+def test_unvalidated_backend_selection_is_rejected(prepared_env, backend):
+    launcher, config, system, inspector, process = prepared_env
+    with pytest.raises(ValueError, match='graphics backend'):
+        launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                         system_root=system, graphics_backend=backend)
+    assert not config.backup_root.exists()
+
+
 def test_hash_drift_prevents_launch(prepared_env):
     launcher, config, system, inspector, process = prepared_env
     prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',

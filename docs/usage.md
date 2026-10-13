@@ -1,6 +1,6 @@
 # PSP Buddy development usage
 
-Implementation is in progress. The package and local tactical rules can be tested without PPSSPP. `inspect`, `validate`, and `run` currently refuse execution; no autonomous battle capability has been validated.
+Implementation is in progress. The package and local tactical rules can be tested without PPSSPP. `validate` reports offline configuration/profile capabilities; `inspect --record` decodes supplied record bytes. `run` refuses live execution, including with `--dry-run`; no autonomous battle capability has been validated.
 
 ## Setup and offline checks
 
@@ -9,7 +9,8 @@ From the repository root in PowerShell:
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e '.[dev]'
-.\.venv\Scripts\python.exe -m pytest tests/unit -q
+$testRunId = Get-Date -Format 'yyyyMMdd-HHmmss-ffff'
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp "local/pytest-$testRunId"
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m mypy src/psp_buddy
 .\.venv\Scripts\python.exe -m psp_buddy --help
@@ -17,7 +18,41 @@ py -3 -m venv .venv
 
 Python 3.11 or newer is required. Tests use synthetic observations and temporary save trees. Ordinary test runs exclude live tests. On this Windows installation, the sandbox blocks access to Python-created temporary directories; synthetic pytest checks were verified with approved execution outside that restriction.
 
-Copy `config.example.json` to ignored `local/config.json` and supply your own paths. Existing save directories, distinct original/portable roots, a separate backup root, and a loopback WebSocket endpoint are required. A structurally valid configuration does not establish a validated game profile or authorize play. Do not put backups inside any source save directory or source directories inside the configured backup root.
+Copy `config.example.json` to ignored `local/config.json` and supply your own paths. Relative paths are resolved against the configuration file's directory: after copying, adjust them accordingly (for example, `profile.json` and `../backups`). Existing save directories, distinct original/portable roots, a separate backup root, and a loopback WebSocket endpoint are required. A structurally valid configuration does not establish a validated game profile or authorize play. Do not put backups inside any source save directory or source directories inside the configured backup root.
+
+## Read-only CLI commands
+
+```powershell
+.\.venv\Scripts\python.exe -m psp_buddy validate --config local/config.json
+.\.venv\Scripts\python.exe -m psp_buddy validate --config local/config.json --instructions-file local/instructions.txt
+.\.venv\Scripts\python.exe -m psp_buddy inspect --config local/config.json --record local/record.bin
+.\.venv\Scripts\python.exe -m psp_buddy run --config local/config.json
+```
+
+Successful `validate` and `inspect` commands print JSON and exit with code 0. Invalid input and disabled `run` exit with code 2. `validate` checks the configuration schema, local save roots, inspection-profile identity and optional policy clauses. It reports each live gate as unestablished by this offline command. The report does not certify executable/game-image contents or authenticate the profile's evidence references. A configured retry ceiling can reduce the default policy; instructions requesting more retries than that ceiling are rejected.
+
+`inspect` requires `--record` containing exactly the profile's `record_size` bytes. Omitting it cannot fall back to live memory observation. Output includes decoded values, supplied provenance, `live_authenticated: false`, and `tactical_snapshot_available: false`. Neither command imports live control adapters or writes saves. `--dry-run` is accepted for `validate` and `run`; validation is always read-only, and the flag cannot bypass `run`'s live gates.
+
+The configured profile file accepts only `kind: "stat_inspection"`, `schema_version: 1`, exact game/patch/emulator identity, a unit label, bounded record address/size, and field bindings. Each field needs a supported name, offset, width (1, 2 or 4 bytes), and nonempty evidence references. Duplicate JSON keys, unknown descriptor fields, overlapping bindings and unsupported tactical-profile claims are rejected. This example illustrates the schema only; its offsets/address are not a calibrated game profile:
+
+```json
+{
+  "kind": "stat_inspection",
+  "schema_version": 1,
+  "game_id": "ULJS00460",
+  "patch_id": "english-v0.8",
+  "emulator_version": "1.20.4",
+  "unit_label": "Supplied inspection fixture",
+  "record_address": 142606336,
+  "record_size": 4,
+  "fields": [
+    {"name": "hp", "offset": 0, "width": 2, "evidence_ids": ["supplied-hp-reference"]},
+    {"name": "max_hp", "offset": 2, "width": 2, "evidence_ids": ["supplied-max-hp-reference"]}
+  ]
+}
+```
+
+The offline CLI currently loads robot-style `InspectionProfile` descriptors. The separate `PilotInspectionProfile` API below does not yet have a CLI descriptor format.
 
 ## Supported local instructions
 
@@ -69,10 +104,11 @@ Images are fully decoded with [Pillow's image-loading API](https://pillow.readth
 
 `InspectionProfile` describes an explicitly corroborated record using immutable `FieldBinding` entries with evidence references. `decode_inspection(profile, record_bytes, game_id, patch_id, emulator_version)` checks the identities and decodes bounded unsigned little-endian fields. Current and maximum HP are required; overlapping fields, incomplete records and resource values above their supplied maxima are rejected. Missing optional stats remain unavailable through `StatInspection.get(name)`.
 
-The preserved Gundam 00 record matches its visible HP `5000/5000`, EN `121/210`, defense 1150, mobility 165 and accuracy 170. This API does not read emulator memory itself or produce a tactical snapshot. Evidence references are caller-supplied provenance, not automatically authenticated files. Pilot SP bindings, deployed roster, affiliation, coordinates and legal actions still need validation before autonomous play.
+The preserved Gundam 00 record matches its visible HP `5000/5000`, EN `121/210`, defense 1150, mobility 165 and accuracy 170. This API does not read emulator memory itself or produce a tactical snapshot. Evidence references are caller-supplied provenance, not automatically authenticated files. Deployed roster, affiliation, coordinates and legal actions still need validation before autonomous play.
 
-The reader passed independent review with no Important or Critical findings. The 12 October
-continuation adds the offline contracts below; none enables autonomous CLI execution.
+`PilotInspectionProfile` describes a separate named pilot-record window with evidence-bound `sp`, `level`, and optional `max_sp`/`will` bindings. `decode_pilot_inspection(profile, record_bytes, game_id, patch_id, emulator_version)` requires exact-sized immutable bytes, matching identity and a positive level, and rejects SP above a supplied maximum. Its `PilotInspection` result carries a pilot label and record-window label, without claiming a deployed pilot identity, roster membership or tactical state. The reader passed independent review. Preserved fresh samples from two protected launches decode Setsuna SP `55/95`, level 36 and will 150, matching visually inspected screens. This corroborates one stationary named fixture; other pilots, record strides and cross-map identity remain unvalidated.
+
+The offline inspection and control contracts below do not enable autonomous CLI execution.
 
 ## Conservative screen recognition
 
@@ -84,10 +120,14 @@ screens return `Screen.UNKNOWN`. The result carries the frame digest, sequence a
 references, with no decoded text, phase, unit identity, or legal-action claims.
 
 Private calibration distinguishes the preserved Unit/Pilot/Mech information screens and
-rejects the preserved map and command menus. These are reference-frame and cross-screen
-checks, not held-out or fresh live validation. Changed stats, rendering or layout may produce
-unknown results. Evidence references are caller-supplied provenance; signature selection must
-be separately reviewed before use. Production screen/menu profiles remain a live gate.
+rejects the preserved map and command menus. Static anchors have been recalibrated to avoid
+changing stat content. The unchanged frozen profile correctly classified Unit/Pilot/Mech
+and rejected map/command screens in a separate protected launch of the same fixture.
+Other units, layouts and battle prompts remain unvalidated. Changed rendering or
+layout may still produce unknown results. Evidence references are caller-supplied provenance;
+signature selection must be separately reviewed before use. These signatures identify screen
+classes, not the active menu choice or tactical state. Production screen/menu profiles remain
+a live gate.
 
 ## Offline checkpoints and supervision
 
@@ -121,15 +161,47 @@ HP, while repeated unchanged occurrence evidence does not establish progress. De
 dialogue additionally requires a reviewed `Snapshot.dialogue_id` identifying its content or
 script position; an increasing frame sequence alone cannot justify another skip.
 
-The executor remains an injected integration contract. Its `cleanup()` must release injected
-controls and return the known pause status; failure is reported with unknown pause state.
-No production menu executor, live checkpoint backend, or autonomous runner is available.
+## Bounded executor API
 
-The synthetic two-turn scenario composes the actual checkpoint, tactical, reaction and
-supervisor services with an offline world. It verifies one working slot, save-before-end-turn,
+`BoundedExecutor(adapter, recipes, stop_requested=..., max_steps=16,
+timeout_seconds=5, cleanup_timeout_seconds=2)` implements the generic transition engine.
+The recipe provider receives the exact action and source snapshot and returns an immutable
+`ActionRecipe`, or `None` to refuse an unsupported action. Recipes bind the source capture,
+sequence and game/patch/map/profile identity using `RecipeBinding.from_snapshot(snapshot)`.
+Each `RecipeStep` supplies a finite adapter command, expected before/after contexts,
+reviewed evidence references and an explicit postcondition. A separate final postcondition
+must confirm the action outcome. There are no default production menu sequences.
+
+The injected adapter implements `observe() -> ExecutionObservation`, `send(command)` and
+`release_all() -> bool | None`. Observations include the validated snapshot, reviewed menu
+identity, `ActionSelection`, and dialogue/attack context when applicable.
+`ExpectedContext.from_observation(observation)` creates an exact context expectation.
+Before sending, the executor reobserves fresh unchanged tactical evidence and current legal
+action membership. It verifies each transition and rejects choices, unexpected menus,
+stale selections, unexplained allied disappearance, missing dialogue/attack evidence and
+no progress. Positively recognized decision-free dialogue requires a changing dialogue
+identity or leaving that screen; a fresh capture alone is insufficient.
+
+`execute(action, before) -> Snapshot` returns only after final postconditions and control
+release. Verified final defeat and map-clear outcomes are returned to the supervisor for
+reload or handover; they never authorize another intermediate input. Uncertain outcomes
+raise `ExecutionError` with a handover reason and disable that executor. Stop, timeout,
+connection loss and cancellation attempt bounded release; repeated cancellation cannot
+abandon awaiting that release. `cleanup()` returns known pause status or `None`, without
+toggling pause. Cleanup failure is reported explicitly.
+
+Recipes, predicates and adapter evidence require separate review and live calibration.
+Synchronous adapters/predicates cannot be preempted; explicit elapsed-deadline checks apply
+when they return. No live menu adapter, calibrated production recipes, live checkpoint
+backend, or autonomous runner is available.
+
+The synthetic two-turn scenario composes the actual bounded executor, checkpoint, tactical,
+reaction and supervisor services with an offline world. It verifies one working slot, save-before-end-turn,
 reaction-only retry, successful-phase reset and map-clear handover. It does not validate game
-menus or actual PPSSPP state parsing. No emulator trial was performed on 12 October; native
-application control was unavailable in this session.
+menus or actual PPSSPP state parsing. Supported Windows menu control is available in the
+13 October session, while capture still requires that caller-supplied control plus the
+screenshot collector. A standalone unattended capture bridge remains unimplemented.
 
-Verification on 12 October: 398 offline tests pass, Ruff `check .` and strict mypy `src`
-pass, CLI help works and `run` refuses execution as expected. All changes remain uncommitted.
+Verification on 13 October 2026: 545 offline tests pass, Ruff `check .` and strict mypy `src`
+(19 source files) pass. CLI validation/record inspection work offline; `run` refuses live
+execution as expected. Current session changes remain uncommitted.
