@@ -16,6 +16,8 @@ from .inspection_io import (
     parse_inspection_profile,
     read_bounded,
 )
+from .map_inspection import decode_map_inspection
+from .map_inspection_io import load_map_records, parse_map_inspection_profile
 from .models import Policy
 from .policy import parse_policy
 from .reader import decode_inspection
@@ -33,6 +35,10 @@ LIVE_GATES = (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='PSP Buddy read-only offline tooling')
     commands = parser.add_subparsers(dest='command', required=True)
+    map_command = commands.add_parser('inspect-map', help='offline named map-record inspection')
+    map_command.add_argument('--config', required=True, help='Local machine configuration JSON')
+    map_command.add_argument('--records', required=True,
+                             help='Supplied local records manifest JSON')
     for name in ('validate', 'inspect', 'run'):
         command = commands.add_parser(name, help=(
             'disabled: live integration gates pending' if name == 'run' else 'offline read-only'))
@@ -74,6 +80,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         config = _load_config(Path(args.config))
+        if args.command == 'inspect-map':
+            map_profile = parse_map_inspection_profile(load_json_object(config.profile_path))
+            if (map_profile.game_id, map_profile.patch_id, map_profile.emulator_version) != (
+                    config.game_id, config.patch_id, config.emulator_version):
+                raise ValueError('profile and configuration identity mismatch')
+            inspected_map = decode_map_inspection(
+                map_profile, load_map_records(Path(args.records), map_profile),
+                config.game_id, config.patch_id, config.emulator_version)
+            map_report: dict[str, object] = asdict(inspected_map)
+            map_report.update(command='inspect-map', mode='offline_read_only',
+                provenance='user_supplied_records_and_profile',
+                calibration='user_asserted_evidence_references_not_authenticated',
+                autonomous_execution_enabled=False, tactical_snapshot_available=False,
+                configuration_valid=True,
+                configuration_validation_scope='schema_identity_and_local_save_root_checks')
+            for capability in ('deployment', 'terrain', 'phase', 'legal_actions'):
+                map_report[capability] = {
+                    'status': 'incomplete',
+                    'reason': 'not_established_by_supplied_named_records',
+                }
+            print(json.dumps(map_report, sort_keys=True))
+            return 0
         profile = parse_inspection_profile(load_json_object(config.profile_path))
         if (profile.game_id, profile.patch_id, profile.emulator_version) != (
             config.game_id, config.patch_id, config.emulator_version,

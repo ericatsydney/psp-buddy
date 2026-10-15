@@ -1,0 +1,13 @@
+# Installed locally; enable only for a fresh SHA-256-verified protected trial.
+[mcp_servers.ppsspp]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\ericg\code\psp-buddy\local\mcp-ppsspp\node_modules\mcp-ppsspp\dist\index.js']
+cwd = 'C:\Users\ericg\code\psp-buddy'
+enabled = false
+env_vars = ['PPSSPP_PORT']
+enabled_tools = ['ppsspp_ping', 'ppsspp_get_info', 'ppsspp_read8', 'ppsspp_read16', 'ppsspp_read32', 'ppsspp_read_range']
+startup_timeout_sec = 15
+tool_timeout_sec = 15
+
+[mcp_servers.ppsspp.env]
+PPSSPP_HOST = '127.0.0.1'

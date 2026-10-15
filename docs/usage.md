@@ -1,6 +1,6 @@
 # PSP Buddy development usage
 
-Implementation is in progress. The package and local tactical rules can be tested without PPSSPP. `validate` reports offline configuration/profile capabilities; `inspect --record` decodes supplied record bytes. `run` refuses live execution, including with `--dry-run`; no autonomous battle capability has been validated.
+Implementation is in progress. The package and local tactical rules can be tested without PPSSPP. `validate` reports offline configuration/profile capabilities; `inspect --record` decodes supplied stat bytes; `inspect-map --records` inspects supplied named records with explicit unknown map fields. `run` refuses live execution, including with `--dry-run`; no autonomous battle capability has been validated.
 
 ## Setup and offline checks
 
@@ -33,7 +33,7 @@ Successful `validate` and `inspect` commands print JSON and exit with code 0. In
 
 `inspect` requires `--record` containing exactly the profile's `record_size` bytes. Omitting it cannot fall back to live memory observation. Output includes decoded values, supplied provenance, `live_authenticated: false`, and `tactical_snapshot_available: false`. Neither command imports live control adapters or writes saves. `--dry-run` is accepted for `validate` and `run`; validation is always read-only, and the flag cannot bypass `run`'s live gates.
 
-The configured profile file accepts only `kind: "stat_inspection"`, `schema_version: 1`, exact game/patch/emulator identity, a unit label, bounded record address/size, and field bindings. Each field needs a supported name, offset, width (1, 2 or 4 bytes), and nonempty evidence references. Duplicate JSON keys, unknown descriptor fields, overlapping bindings and unsupported tactical-profile claims are rejected. This example illustrates the schema only; its offsets/address are not a calibrated game profile:
+For the original commands, the configured profile file accepts only `kind: "stat_inspection"`, `schema_version: 1`, exact game/patch/emulator identity, a unit label, bounded record address/size, and field bindings. Each field needs a supported name, offset, width (1, 2 or 4 bytes), and nonempty evidence references. Duplicate JSON keys, unknown descriptor fields, overlapping bindings and unsupported tactical-profile claims are rejected. This example illustrates the schema only; its offsets/address are not a calibrated game profile:
 
 ```json
 {
@@ -205,3 +205,40 @@ screenshot collector. A standalone unattended capture bridge remains unimplement
 Verification on 13 October 2026: 545 offline tests pass, Ruff `check .` and strict mypy `src`
 (19 source files) pass. CLI validation/record inspection work offline; `run` refuses live
 execution as expected. Current session changes remain uncommitted.
+
+## Offline named-record map inspection
+
+```powershell
+.\.venv\Scripts\python.exe -m psp_buddy inspect-map --config local/map-config.json --records local/map-records.json
+```
+
+The config uses the existing machine schema; its `profile_path` points to a separate
+`map_inspection` descriptor, schema version 1. Exact descriptor keys are `kind`,
+`schema_version`, `game_id`, `patch_id`, `emulator_version`, `map_label`, `dimensions` and
+`records`. `dimensions` is null when unknown, or `[width, height]` in 1..1024. Each explicit
+record has `label`, `address`, `size`, `fields`; each field has `name`, `offset`, `width`,
+`evidence_ids` and `meanings`. Names are unit_id, hp/max_hp, en/max_en, sp/max_sp, x/y,
+side and action_available. Ordinary numeric fields use `meanings: []`. Side/action encodings
+require explicit `[raw_integer, meaning]` pairs: ally/enemy/neutral or available/spent.
+Coordinates require both x/y and known dimensions. HP maxima must be positive; EN/SP may
+have zero capacity when current is zero. Layouts and record windows must not overlap.
+
+The separate records manifest contains exact `kind: "map_records"`, `schema_version: 1`
+and a `records` array of `{ "label": "matching profile label", "path": "record.bin" }`
+entries in profile order. Relative binary paths resolve against the manifest directory.
+Supply exact-sized immutable bytes; records are bounded at 64 KiB each, 256 records and
+1 MiB total. Duplicate JSON keys, wrong types, unknown keys, mismatched labels/count/order,
+identity mismatch and invalid enum/resource/coordinate values fail closed.
+
+Reports always say `named_records_only` and retain missing fields as null plus reasons.
+Supplied evidence references are assertions; this command never certifies deployment or
+live authentication. Terrain, phase, legal actions and complete deployed roster remain
+unavailable. No live control adapters are imported; a missing manifest cannot launch PPSSPP.
+The report is suitable for research, not a tactical Snapshot or autonomous play.
+
+The installed local MCP 0.2.0 passed a separate protected live known-record read comparison
+with Python on 14 October. The sampled fixture matched HP5000/5000, EN121/210 and SP55/95,
+with original/snapshot/archive hashes preserved. Supported capture failed in a separate trial,
+so deployed positions and affiliations remain unverified. The project MCP registration stays
+disabled outside protected trials. See the [assessment](research/2026-10-14-mcp-ppsspp-assessment.md)
+and [map-inspection plan](superpowers/plans/2026-10-14-map-inspection.md).

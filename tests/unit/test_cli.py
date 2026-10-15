@@ -153,3 +153,74 @@ def test_oversized_instructions_fail_before_policy_parsing(tmp_path, config_valu
     report = json.loads(capsys.readouterr().err)
     assert 'bounds' in report['error']
     assert report['autonomous_execution_enabled'] is False
+
+
+def map_files(tmp_path, config_values):
+    config, profile, record = files(tmp_path, config_values)
+    profile.write_text(json.dumps(dict(kind='map_inspection', schema_version=1,
+        game_id=config_values['game_id'], patch_id=config_values['patch_id'],
+        emulator_version=config_values['emulator_version'], map_label='synthetic',
+        dimensions=None, records=[dict(label='one', address=0x08800000, size=4, fields=[
+            dict(name='hp', offset=0, width=2, evidence_ids=['hp'], meanings=[]),
+            dict(name='max_hp', offset=2, width=2, evidence_ids=['max-hp'], meanings=[])])])))
+    manifest = tmp_path / 'records.json'
+    manifest.write_text(json.dumps(dict(kind='map_records', schema_version=1,
+        records=[dict(label='one', path=record.name)])))
+    return config, profile, record, manifest
+
+
+def test_inspect_map_reports_named_unknowns_and_incomplete_capabilities(
+    tmp_path, config_values, capsys,
+):
+    config, _, _, manifest = map_files(tmp_path, config_values)
+    assert main(['inspect-map', '--config', str(config), '--records', str(manifest)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['records'][0]['hp'] == 50
+    assert report['records'][0]['x'] is None
+    assert report['roster_completeness'] == 'named_records_only'
+    assert report['provenance'] == 'user_supplied_records_and_profile'
+    assert report['calibration'] == 'user_asserted_evidence_references_not_authenticated'
+    for key in ('live_authenticated', 'autonomous_execution_enabled',
+                'tactical_snapshot_available'):
+        assert report[key] is False
+    for key in ('deployment', 'terrain', 'phase', 'legal_actions'):
+        assert report[key]['status'] == 'incomplete'
+
+
+@pytest.mark.parametrize('problem', ['identity', 'short', 'missing', 'manifest'])
+def test_inspect_map_failures_have_no_fallback(tmp_path, config_values, capsys, problem):
+    config, profile, record, manifest = map_files(tmp_path, config_values)
+    if problem == 'identity':
+        values = json.loads(profile.read_text())
+        values['game_id'] = 'other'
+        profile.write_text(json.dumps(values))
+    elif problem == 'short':
+        record.write_bytes(b'a')
+    elif problem == 'missing':
+        record.unlink()
+    else:
+        manifest.write_text('{}')
+    assert main(['inspect-map', '--config', str(config), '--records', str(manifest)]) == 2
+    assert 'error' in json.loads(capsys.readouterr().err)
+
+
+def test_inspect_map_requires_records(tmp_path, config_values):
+    config, _, _, _ = map_files(tmp_path, config_values)
+    with pytest.raises(SystemExit) as stopped:
+        main(['inspect-map', '--config', str(config)])
+    assert stopped.value.code == 2
+
+
+def test_map_command_imports_no_live_modules_and_writes_no_files(tmp_path, config_values):
+    config, _, _, manifest = map_files(tmp_path, config_values)
+    code = """import sys
+from psp_buddy.cli import main
+assert main(['inspect-map', '--config', sys.argv[1], '--records', sys.argv[2]]) == 0
+assert not any('psp_buddy.' + name in sys.modules for name in
+               ('launch', 'trial', 'debugger', 'checkpoint', 'executor', 'supervisor', 'snapshot'))
+"""
+    before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    result = subprocess.run([sys.executable, '-B', '-c', code, str(config), str(manifest)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}

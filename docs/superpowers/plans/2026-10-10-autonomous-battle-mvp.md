@@ -1,5 +1,155 @@
 # Autonomous Battle MVP Implementation Plan
 
+## MCP evaluation update, 2026-10-14
+
+Historical evaluation/initial checklist below. Current implementation, successful protected
+MCP known-record reads and remaining map-discovery gates are tracked in
+[the map-inspection continuation](2026-10-14-map-inspection.md). Initial unchecked items
+below do not override that plan's completed work or imply live reads remain untested.
+
+**Subsequent user request:** install the MCP and study efficient memory/map understanding.
+Pinned `mcp-ppsspp@0.2.0` is now installed in ignored `local/mcp-ppsspp` and registered in
+project `.codex/config.toml`, disabled pending a protected live session, with six inspection
+tools allowed. Offline MCP discovery and synthetic typed/bulk read checks pass (24 upstream
+tools discovered). Actual PPSSPP v1.20.4 source confirms typed reads use `value`; the earlier
+transport-comment concern is resolved. No live connection or new tactical fields were verified.
+These facts supersede the installation deferral in the original evaluation below.
+
+### M4: Efficient memory/map discovery priority
+
+**Files:** research updates in `docs/research/2026-10-14-mcp-ppsspp-assessment.md` and
+`docs/research/2026-10-10-profile-validation.md`; raw bytes, diff reports and trial scripts
+remain ignored under `local/` and `backups/`. No production reader changes during discovery.
+
+- [x] Install a pinned local package, inspect compiled handlers, verify MCP inventory and
+  typed/bulk formatting offline, and register a disabled narrow inspection configuration.
+- [ ] Before a live server start, freshly back up complete original/portable save directories
+  and configuration, verify SHA-256 manifests and claim a protected owned listener. Verify game
+  and emulator identity; do not allow concurrent controllers or automatic reconnect continuation.
+- [ ] Read known 0x50-byte mech/pilot records using bulk reads and compare with established
+  profiles. Exact byte lengths, identities and private evidence hashes are required.
+- [ ] Use preserved regional samples for offline record/pointer search, then gather visibly
+  corroborated before/after samples for a single bounded cursor/selection change in a separately
+  protected trial. Do not classify a changing coordinate as a unit position without corroboration.
+- [ ] Validate active-roster count/stride or pointers, unique IDs, sides and positions across
+  several allies/enemies and inactive/reserve negative examples. Validate map dimensions,
+  tile ordering, terrain and occupancy across multiple tiles and a held-out map/reload.
+- [ ] Keep candidates unavailable to the planner. Before implementing a map reader, present
+  the evidence-bound interface/design for explicit approval, update the spec and detailed TDD
+  plan, then implement and review bounded tasks. Existing live acceptance gates still apply.
+
+Success for this research is a reproducible field/evidence table and unknown-field list,
+not simply MCP connectivity. Use local chunk analysis to reduce round trips and avoid large
+hex dumps in chat; use existing protected Python observation scopes for coherent multi-block
+samples. Current MCP configuration does not permit pause, input, writes or screenshot calls.
+
+Documentation-only update requested by the user after reviewing
+[dmang-dev/mcp-ppsspp](https://github.com/dmang-dev/mcp-ppsspp).
+Starting tree is clean at `f437f30`. See the
+[source assessment](../../research/2026-10-14-mcp-ppsspp-assessment.md).
+This section updates the next-work priority; earlier continuation entries remain historical.
+No MCP installation, registration, emulator connection or live trial was performed.
+
+**Recommendation:** retain the protected Python debugger as the production transport.
+Use the upstream implementation as a reference for a focused capture investigation.
+Evaluate an optional MCP discovery interface only if it offers a measurable workflow benefit.
+The existing approved battle scope remains unchanged; a new exposed MCP control interface
+requires design/spec review before implementation. `run` remains disabled.
+
+| Approach | Benefit | Cost / decision |
+| --- | --- | --- |
+| Keep Python; investigate the upstream capture recipe | Smallest change; retains owned-session, identity and cleanup enforcement | Recommended first; successful capture must be demonstrated locally |
+| Optional protected MCP discovery interface | Convenient interactive inspection during profile research | Requires a gated wrapper, tool restrictions and evidence export; defer until the capture investigation is evaluated |
+| Replace runtime transport with the upstream server | Reuses a general debugger tool interface | Adds Node/MCP integration and requires rebuilding current safety contracts; do not adopt for the MVP |
+
+### M1: Offline protocol and capture comparison (before the next Task 4 trial)
+
+**Files:** inspect `src/psp_buddy/debugger.py`, `capture.py`, `launch.py`,
+`tests/unit/test_debugger.py`, `test_transport.py`, `test_capture.py`; record findings in
+`docs/research/2026-10-14-mcp-ppsspp-assessment.md`. No production changes in this step.
+
+- [ ] Resolve and record the upstream commit SHA, package version and source hashes before
+  using its recipe; the assessment currently references mutable `main`, not a pinned release.
+  Compare its event names, image response formats and pause transitions against the actual
+  PPSSPP v1.20.4 source and retained private failure evidence.
+- [ ] Determine whether the base64 response format supplies a meaningful untested difference
+  from existing URI capture failures. A transport wrapper cannot establish GPU compatibility.
+  Preserve both prior render/output failures and the successful menu-triggered collector.
+- [ ] Write the proposed capture contract into the existing MVP spec for user review before
+  implementation: owned launch and debugger binding, bounded decoded image, expected size,
+  game/trial identity, monotonic sequence, digest, serialized observation and pause cleanup.
+  Define whether render captures require separate recognition calibration.
+
+### M2: Conditional Python capture implementation and protected validation
+
+**Files if M1 justifies a change:** modify `src/psp_buddy/debugger.py`,
+`src/psp_buddy/capture.py`, `tests/unit/test_debugger.py`, `tests/unit/test_capture.py`;
+create `tests/integration/test_capture.py`; update the MVP spec, this plan and the assessment.
+Do not broaden the command allowlist beyond the reviewed image format change.
+
+- [ ] First observe meaningful failing synthetic tests for the newly proposed response format,
+  malformed/oversized base64, incomplete/blank/wrong-size images, changed session binding,
+  cancellation, concurrent capture/input, retained user pause and failed resume. Existing URI
+  behavior and file-collector regressions must remain covered.
+- [ ] Implement only the approved format/decoder path using the existing observation scope.
+  On uncertain cleanup, prohibit subsequent actions and report the uncertainty. A decoded
+  image without a verified bound session must never become an accepted observation.
+- [ ] Run focused tests, then full offline verification using the commands below. Review the
+  working tree against the updated spec and fix blocking findings before a live trial.
+- [ ] Before EACH live trial, confirm PPSSPP is closed or not writing saves; create fresh
+  timestamped complete SHA-256-verified original AND portable SAVEDATA/PPSSPP_STATE backups,
+  retain manifests, and back up configuration before any change. Backup failure blocks launch.
+  Use only the owned portable session; never write to originals or copy trial saves back.
+- [ ] Try render capture first, with no battle actions or simultaneous second debugger client.
+  Confirm visible frame content, dimensions, identity, freshness and restored CPU/UI state;
+  retain private evidence and verify originals/snapshots/archive preservation after closure.
+  Stop on capture/cleanup failure; do not automatically switch to output capture or restart.
+- [ ] A successful trial is followed by a separate freshly backed-up held-out launch with a
+  frozen capture/recognition profile. If either trial fails, retain the file collector and mark
+  unattended capture unverified. Do not enable menus or autonomous play from image success alone.
+
+### M3: Optional MCP discovery decision (deferred)
+
+**Documentation:** update this assessment and `docs/usage.md` only after deciding whether
+interactive tooling adds value. No package dependency or client configuration is added now.
+
+- [ ] If pursued, review a separate design for a narrow interface backed by PSP Buddy's
+  protected launcher/debugger: expose bounded inspection and verified capture only initially.
+  Reject RAM/register writes, reset, stepping, breakpoint mutation, analog and persistent holds.
+  Timed input, if later approved, must obey existing duration, postcondition and release rules.
+- [ ] Require backup/session gates before starting any server that connects automatically,
+  even for tool inventory. Use a pinned artifact, Node 22+ if using upstream, loopback only,
+  owned endpoint, exact emulator/game/patch identity and one controller at a time.
+  Test gate rejection without any socket opening. Disconnect/reconnect requires fresh identity
+  and observation validation; never resume stale actions or replay uncertain commands.
+- [ ] Export discovery evidence into existing private records; independently validate it before
+  extending tactical profiles. No raw game text, RAM, screenshots or saves enter public fixtures.
+
+### Verification and unchanged acceptance gates
+
+For M2 use PowerShell at the repository root, with a new basetemp path on each invocation:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_debugger.py tests/unit/test_transport.py tests/unit/test_capture.py -q -p no:cacheprovider --basetemp local/mcp-capture-focused-20261014
+.\.venv\Scripts\python.exe -m pytest tests/unit tests/scenarios -q -p no:cacheprovider --basetemp local/mcp-capture-full-20261014
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy src/psp_buddy
+.\.venv\Scripts\python.exe -m pip wheel . --no-deps --no-build-isolation --wheel-dir local/mcp-capture-wheel
+.\.venv\Scripts\python.exe -m psp_buddy --help
+git diff --check
+```
+
+Expected: all tests/checks pass, wheel builds, CLI help works, and `run` still refuses live
+execution until the existing gates pass. Protected integration commands remain those in the
+Verification contract below; run the new capture module only through its backup-gated fixture.
+The documentation update itself needs link/path review and `git diff --check`, not emulator tests.
+
+Task 4 still needs complete tactical observation and production screen/menu evidence.
+Task 6 still needs verified live checkpoint save/load. Tasks 7/10 still need legal-action
+postconditions and one-map acceptance. MCP availability passes none of those gates.
+Leave all files uncommitted; do not install, register, launch, commit or publish as part of
+this planning update.
+
 ## Five-hour continuation, 2026-10-13
 
 Start from clean `6ac276b`; the previous session's changes are committed by the user.
