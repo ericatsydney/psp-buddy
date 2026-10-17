@@ -9,6 +9,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from .config import RunConfig
+from .end_phase_inspection import decode_end_phase_inspection
+from .end_phase_inspection_io import parse_end_phase_inspection_profile
 from .inspection_io import (
     MAX_INSTRUCTIONS_BYTES,
     load_json_object,
@@ -18,9 +20,20 @@ from .inspection_io import (
 )
 from .map_inspection import decode_map_inspection
 from .map_inspection_io import load_map_records, parse_map_inspection_profile
+from .menu_membership_inspection import decode_menu_membership_inspection
+from .menu_membership_inspection_io import parse_menu_membership_inspection_profile
 from .models import Policy
 from .policy import parse_policy
+from .positioned_inspection import decode_positioned_inspection
+from .positioned_inspection_io import parse_positioned_inspection_profile
 from .reader import decode_inspection
+from .representative_inspection import decode_representative_inspection
+from .representative_inspection_io import (
+    load_representative_spans,
+    parse_representative_inspection_profile,
+)
+from .unit_pool_inspection import decode_unit_pool_inspection
+from .unit_pool_inspection_io import load_inspection_spans, parse_unit_pool_inspection_profile
 
 LIVE_GATES = (
     'fresh_verified_original_and_portable_backups',
@@ -35,7 +48,8 @@ LIVE_GATES = (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='PSP Buddy read-only offline tooling')
     commands = parser.add_subparsers(dest='command', required=True)
-    map_command = commands.add_parser('inspect-map', help='offline named map-record inspection')
+    map_command = commands.add_parser(
+        'inspect-map', help='offline records, forms, tiles, menu membership and End Phase counters')
     map_command.add_argument('--config', required=True, help='Local machine configuration JSON')
     map_command.add_argument('--records', required=True,
                              help='Supplied local records manifest JSON')
@@ -81,7 +95,81 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = _load_config(Path(args.config))
         if args.command == 'inspect-map':
-            map_profile = parse_map_inspection_profile(load_json_object(config.profile_path))
+            descriptor = load_json_object(config.profile_path)
+            if descriptor.get('kind') == 'end_phase_inspection':
+                if config.profile_path.stat().st_nlink != 1:
+                    raise ValueError('end phase profile must not have hard links')
+                end_profile = parse_end_phase_inspection_profile(descriptor)
+                identity = (end_profile.menu_membership_profile.positioned_profile
+                            .representative_profile.pool_profile)
+                if (identity.game_id, identity.patch_id, identity.emulator_version) != (
+                        config.game_id, config.patch_id, config.emulator_version):
+                    raise ValueError('profile and configuration identity mismatch')
+                end_report = decode_end_phase_inspection(
+                    end_profile, load_representative_spans(Path(args.records)),
+                    config.game_id, config.patch_id, config.emulator_version).to_dict()
+                end_report.update(command='inspect-map', configuration_valid=True,
+                    configuration_validation_scope='schema_identity_and_local_save_root_checks')
+                print(json.dumps(end_report, sort_keys=True))
+                return 0
+            if descriptor.get('kind') == 'menu_membership_inspection':
+                if config.profile_path.stat().st_nlink != 1:
+                    raise ValueError('menu membership profile must not have hard links')
+                menu_profile = parse_menu_membership_inspection_profile(descriptor)
+                identity = menu_profile.positioned_profile.representative_profile.pool_profile
+                if (identity.game_id, identity.patch_id, identity.emulator_version) != (
+                        config.game_id, config.patch_id, config.emulator_version):
+                    raise ValueError('profile and configuration identity mismatch')
+                menu_report = decode_menu_membership_inspection(
+                    menu_profile, load_representative_spans(Path(args.records)),
+                    config.game_id, config.patch_id, config.emulator_version).to_dict()
+                menu_report.update(command='inspect-map', configuration_valid=True,
+                    configuration_validation_scope='schema_identity_and_local_save_root_checks')
+                print(json.dumps(menu_report, sort_keys=True))
+                return 0
+            if descriptor.get('kind') == 'positioned_representative_inspection':
+                if config.profile_path.stat().st_nlink != 1:
+                    raise ValueError('positioned profile must not have hard links')
+                positioned_profile = parse_positioned_inspection_profile(descriptor)
+                identity = positioned_profile.representative_profile.pool_profile
+                if (identity.game_id, identity.patch_id, identity.emulator_version) != (
+                        config.game_id, config.patch_id, config.emulator_version):
+                    raise ValueError('profile and configuration identity mismatch')
+                positioned_report = decode_positioned_inspection(
+                    positioned_profile, load_representative_spans(Path(args.records)),
+                    config.game_id, config.patch_id, config.emulator_version).to_dict()
+                positioned_report.update(command='inspect-map', configuration_valid=True,
+                    configuration_validation_scope='schema_identity_and_local_save_root_checks')
+                print(json.dumps(positioned_report, sort_keys=True))
+                return 0
+            if descriptor.get('kind') == 'representative_inspection':
+                if config.profile_path.stat().st_nlink != 1:
+                    raise ValueError('representative profile must not have hard links')
+                representative_profile = parse_representative_inspection_profile(descriptor)
+                identity = representative_profile.pool_profile
+                if (identity.game_id, identity.patch_id, identity.emulator_version) != (
+                        config.game_id, config.patch_id, config.emulator_version):
+                    raise ValueError('profile and configuration identity mismatch')
+                representative_report = decode_representative_inspection(
+                    representative_profile, load_representative_spans(Path(args.records)),
+                    config.game_id, config.patch_id, config.emulator_version).to_dict()
+                representative_report.update(command='inspect-map', configuration_valid=True,
+                    configuration_validation_scope='schema_identity_and_local_save_root_checks')
+                print(json.dumps(representative_report, sort_keys=True))
+                return 0
+            if descriptor.get('kind') == 'unit_pool_inspection':
+                pool_profile = parse_unit_pool_inspection_profile(descriptor)
+                if (pool_profile.game_id, pool_profile.patch_id, pool_profile.emulator_version) != (
+                        config.game_id, config.patch_id, config.emulator_version):
+                    raise ValueError('profile and configuration identity mismatch')
+                pool_report = decode_unit_pool_inspection(
+                    pool_profile, load_inspection_spans(Path(args.records)),
+                    config.game_id, config.patch_id, config.emulator_version).to_dict()
+                pool_report.update(command='inspect-map', configuration_valid=True,
+                    configuration_validation_scope='schema_identity_and_local_save_root_checks')
+                print(json.dumps(pool_report, sort_keys=True))
+                return 0
+            map_profile = parse_map_inspection_profile(descriptor)
             if (map_profile.game_id, map_profile.patch_id, map_profile.emulator_version) != (
                     config.game_id, config.patch_id, config.emulator_version):
                 raise ValueError('profile and configuration identity mismatch')

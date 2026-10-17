@@ -193,8 +193,6 @@ def test_explicit_recipe_executes_one_verified_transition_and_releases():
     [
         ActionKind.MOVE,
         ActionKind.ATTACK,
-        ActionKind.REPAIR,
-        ActionKind.TRUST,
         ActionKind.WAIT,
         ActionKind.END_TURN,
         ActionKind.DEFEND,
@@ -629,3 +627,29 @@ def test_contradictory_defeat_and_departure_refuses_startup_input():
     with pytest.raises(executor.ExecutionError, match="contradictory"):
         asyncio.run(manager.execute(before.legal_actions[0], before))
     assert not adapter.sent
+
+
+@pytest.mark.parametrize("kind", [ActionKind.REPAIR, ActionKind.TRUST])
+def test_excluded_mvp_action_rejects_valid_legal_recipe_before_observation(kind):
+    _, adapter, before, recipe, _, _ = setup(kind)
+    observations = []
+    recipes = []
+    original_observe = adapter.observe
+
+    async def observe():
+        observations.append("observe")
+        return await original_observe()
+
+    def provide(action, snapshot):
+        recipes.append(action)
+        return recipe
+
+    adapter.observe = observe
+    manager = executor.BoundedExecutor(adapter, provide)
+    with pytest.raises(executor.ExecutionError, match="^excluded_mvp_action$"):
+        asyncio.run(manager.execute(before.legal_actions[0], before))
+    assert not observations
+    assert not recipes
+    assert not adapter.sent
+    assert adapter.released == 1
+    assert manager._disabled

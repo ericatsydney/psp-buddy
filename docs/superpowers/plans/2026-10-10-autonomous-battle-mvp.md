@@ -597,3 +597,12 @@ Self-review: all approved requirements map to tasks; service names and return ty
 - Verify the decoder offline against the protected trial's preserved Gundam 00 record and visible mech screen. No emulator launch is needed for this verification.
 
 Implementation checkpoint: 28 reader tests and all 234 offline tests pass; Ruff and strict mypy pass. The preserved record decodes HP 5000/5000 and EN 121/210, matching the visible screen and the user's HP interpretation. Full roster and tactical observation gates remain incomplete.
+
+## User MVP scope revision — 17 October 2026
+
+Player-unit actions are Move and/or Attack only. Spirit (including Trust), Repair, Supply,
+Transform and crew changes are excluded. Earlier healing research/tasks are historical and
+not current MVP requirements. Existing turn/reaction controls remain under prior gates.
+Next offline change is planner plus executor enforcement, specified in
+specs/2026-10-17-move-attack-mvp-design.md, pending written review before production edits.
+No new support-action research or emulator inputs are authorized by this scope revision.

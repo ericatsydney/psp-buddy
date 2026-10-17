@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from psp_buddy.models import (
     Action,
     ActionKind,
@@ -51,41 +53,51 @@ def test_damaged_enemy_precedes_nearer_full_health():
                          Policy()).target_id == 'damaged'
 
 
-def test_healing_reserves_repairer_before_attacks():
-    injured = unit('hurt', hp=69)
-    healer = unit('healer', repair_capable=True, legal_repair_targets=('hurt',))
-    repair = Action(ActionKind.REPAIR, 1, 'healer', 'hurt')
-    assert choose_action(battle([injured, healer], [attack('enemy', actor='healer'), repair]),
-                         Policy()) == repair
-
+def test_supplied_repair_and_trust_are_never_selected_before_legal_attack():
+    actor = unit('actor', weapons=(weapon(),), repair_capable=True, trust_capable=True,
+                 legal_repair_targets=('hurt',), legal_trust_targets=('hurt',),
+                 sp=100, trust_sp_cost=10)
+    hurt = unit('hurt', hp=69, action_available=False)
+    enemy = unit('enemy', Affiliation.ENEMY)
+    chosen = attack('enemy', actor='actor')
+    support = [Action(ActionKind.REPAIR, 1, 'actor', 'hurt'),
+               Action(ActionKind.TRUST, 1, 'actor', 'hurt')]
+    prediction = Prediction('actor', 'enemy', 'w', 10, 100, True)
+    for supplied in (support, support[:1], support[1:]):
+        assert choose_action(battle([actor, hurt, enemy], [*supplied, chosen], (prediction,)),
+                             Policy()) == chosen
 
 def test_unknown_observation_hands_over():
     assert choose_action(Snapshot(1), Policy()).kind is ActionKind.HANDOVER
 
 
-def test_trust_resource_and_threshold_boundary():
-    for hp, sp, expected in [(69, 10, ActionKind.TRUST), (70, 10, ActionKind.WAIT),
-                              (69, 9, ActionKind.WAIT)]:
-        hurt = unit('hurt', hp=hp)
-        healer = unit('healer', trust_capable=True, sp=sp, trust_sp_cost=10,
-                      legal_trust_targets=('hurt',), action_available=False)
+def test_injury_threshold_retains_wait_without_reading_trust_resources():
+    for hp, sp in [(69, 10), (70, 10), (69, 9), (69, None)]:
+        hurt = unit('hurt', hp=hp, repair_capable=None, trust_capable=None)
+        healer = unit('healer', trust_capable=True, sp=sp, trust_sp_cost=None,
+                      legal_trust_targets=None, action_available=False)
         trust = Action(ActionKind.TRUST, 1, 'healer', 'hurt')
         wait = Action(ActionKind.WAIT, 1, 'hurt')
-        result = choose_action(battle([hurt, healer], [trust, wait]), Policy())
-        assert result.kind is expected
+        assert choose_action(battle([hurt, healer], [trust, wait]), Policy()) == wait
 
-
-def test_post_heal_replans_and_never_reuses_reserved_action():
-    hurt = unit('hurt', hp=69, legal_moves=((-1, 0),))
-    healer = unit('healer', repair_capable=True, legal_repair_targets=('hurt',))
-    repair = Action(ActionKind.REPAIR, 1, 'healer', 'hurt')
-    before = battle([hurt, healer], [repair])
-    assert choose_action(before, Policy()) == repair
-    after = replace(before, sequence=2, units=(replace(hurt, hp=100),
-                    replace(healer, action_available=False)),
-                    legal_actions=(Action(ActionKind.WAIT, 2, 'hurt'),))
-    assert choose_action(after, Policy()).kind is ActionKind.WAIT
-
+def test_fresh_move_then_attack_ignores_unknown_excluded_healing_fields():
+    actor = unit('ally', weapons=(weapon(),), legal_moves=((1, 0),),
+                 repair_capable=None, trust_capable=None, sp=None)
+    hurt = unit('hurt', hp=69, action_available=False, repair_capable=None,
+                trust_capable=None, legal_repair_targets=None, legal_trust_targets=None)
+    enemy = unit('enemy', Affiliation.ENEMY, position=(2, 0))
+    combined = replace(attack('enemy'), destination=(1, 0))
+    move = Action(ActionKind.MOVE, 1, 'ally', destination=(1, 0))
+    prediction = Prediction('ally', 'enemy', 'w', 10, 100, True)
+    before = battle([actor, hurt, enemy], [combined, move], (prediction,))
+    assert choose_action(before, Policy()) == move
+    after = replace(before, sequence=2,
+                    units=(replace(actor, position=(1, 0)), hurt, enemy),
+                    legal_actions=(Action(ActionKind.ATTACK, 2, 'ally', 'enemy', 'w'),))
+    assert choose_action(after, Policy()) == after.legal_actions[0]
+    with pytest.raises(ValueError, match="stale legal"):
+        replace(after, legal_actions=before.legal_actions)
+    assert choose_action(replace(after, legal_actions=None), Policy()).kind is ActionKind.HANDOVER
 
 def test_retreat_minimizes_exposure_and_does_not_attack():
     hurt = unit('hurt', hp=69, legal_moves=((-1, 0),))
@@ -217,16 +229,14 @@ def test_cost_ties_prefer_damage_then_stable_weapon_identity():
     assert choose_action(battle([ally, enemy], actions, predictions), Policy()).weapon_id == 'a'
 
 
-def test_unknown_sp_and_healing_legality_hand_over():
-    hurt = unit('hurt', hp=69)
-    healer = unit('healer', trust_capable=True, sp=None, trust_sp_cost=10,
-                  legal_trust_targets=('hurt',), action_available=False)
-    trust = Action(ActionKind.TRUST, 1, 'healer', 'hurt')
-    assert choose_action(battle([hurt, healer], [trust]), Policy()).kind is ActionKind.HANDOVER
-    healer = replace(healer, trust_capable=False, repair_capable=True,
-                     action_available=True, legal_repair_targets=None)
-    assert choose_action(battle([hurt, healer], [trust]), Policy()).kind is ActionKind.HANDOVER
-
+def test_unknown_healing_and_sp_do_not_block_valid_injured_retreat():
+    hurt = unit('hurt', hp=69, legal_moves=((-1, 0),), repair_capable=None,
+                trust_capable=None, sp=None, trust_sp_cost=None,
+                legal_repair_targets=None, legal_trust_targets=None)
+    enemy = unit('enemy', Affiliation.ENEMY, position=(1, 0),
+                 attack_positions=((0, 0),))
+    move = Action(ActionKind.MOVE, 1, 'hurt', destination=(-1, 0))
+    assert choose_action(battle([hurt, enemy], [move]), Policy()) == move
 
 def test_boss_baseline_uses_instance_medians_and_requires_strict_both_stats():
     from psp_buddy.planner import is_boss

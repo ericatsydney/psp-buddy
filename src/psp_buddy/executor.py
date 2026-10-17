@@ -420,6 +420,8 @@ class BoundedExecutor:
             try:
                 if self._disabled:
                     raise ExecutionError("executor_disabled")
+                if action.kind in (ActionKind.REPAIR, ActionKind.TRUST):
+                    raise ExecutionError("excluded_mvp_action")
                 deadline = asyncio.get_running_loop().time() + self._timeout
                 async with asyncio.timeout_at(deadline):
                     self._check(deadline)

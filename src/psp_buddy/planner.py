@@ -195,33 +195,7 @@ def _choose(snapshot: Snapshot, policy: Policy) -> Action:
                     or action.destination not in actor.legal_moves):
                 raise UnknownEvidence("conflicting or unknown legal destination")
     injured = [u for u in allies if _hp(u) * 100 < policy.heal_below_percent]
-    # Healing across the entire roster precedes any attack, preserving repairer actions.
-    for kind in (ActionKind.REPAIR, ActionKind.TRUST):
-        for target in injured:
-            for healer in allies:
-                capability = healer.repair_capable if kind is ActionKind.REPAIR \
-                    else healer.trust_capable
-                if capability is None:
-                    raise UnknownEvidence("unknown healing capability")
-                if not capability or (kind is ActionKind.REPAIR and not healer.action_available):
-                    continue
-                targets = healer.legal_repair_targets if kind is ActionKind.REPAIR \
-                    else healer.legal_trust_targets
-                if targets is None:
-                    raise UnknownEvidence("unknown healing reachability")
-                if target.id not in targets:
-                    continue
-                if kind is ActionKind.TRUST:
-                    if healer.sp is None or healer.trust_sp_cost is None:
-                        raise UnknownEvidence("unknown Trust SP")
-                    if healer.trust_sp_cost < 0 or healer.sp < 0:
-                        raise UnknownEvidence("invalid Trust SP")
-                    if healer.sp < healer.trust_sp_cost:
-                        continue
-                candidates = [a for a in actions if a.kind is kind
-                              and a.actor_id == healer.id and a.target_id == target.id]
-                if candidates:
-                    return candidates[0]
+    # Injury handling remains conservative; excluded support actions are never considered.
     for actor in allies:
         if not actor.action_available:
             continue

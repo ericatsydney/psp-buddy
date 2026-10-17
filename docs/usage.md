@@ -67,6 +67,13 @@ target damaged enemies before undamaged enemies
 use medium strength weapons otherwise; stop on map clear
 ```
 
+MVP unit commands are Move and Attack only. Repair (healing), all Spirit commands
+(including Trust), Supply, Transform and crew changes are excluded. The legacy parser
+still accepts the healing clauses above for configuration compatibility; they do not
+enable healing. The HP threshold remains the existing retreat threshold. The executor
+rejects Repair/Trust even when a caller supplies a legal-action entry and recipe.
+Wait/End Turn and enemy reactions remain existing orchestration controls.
+
 An empty instruction string selects the specification's defaults. Rules run locally, without model calls. The planner returns one action tied to the current validated snapshot. The caller must execute and reobserve before choosing again. Unknown required resources, legal actions, predictions, or enemy attack coverage produce handover rather than invented values.
 
 ## Protection and remaining gates
@@ -242,3 +249,200 @@ with original/snapshot/archive hashes preserved. Supported capture failed in a s
 so deployed positions and affiliations remain unverified. The project MCP registration stays
 disabled outside protected trials. See the [assessment](research/2026-10-14-mcp-ppsspp-assessment.md)
 and [map-inspection plan](superpowers/plans/2026-10-14-map-inspection.md).
+
+## Offline structural unit-pool inspection
+
+`inspect-map` also accepts a `unit_pool_inspection` profile (schema version1) and an
+`inspection_spans` manifest. This reader enumerates candidate pool slots and retains every
+associated robot/pilot descriptor binding. It handles varying candidate counts and preserves
+multiple forms/crew without choosing a primary pilot. The existing named-record format is
+still available for separately established stat fields.
+
+```powershell
+.\.venv\Scripts\python.exe -m psp_buddy inspect-map --config local/pool-config.json --records local/pool-spans.json
+```
+
+Use the existing machine-config schema, with `profile_path` pointing to this descriptor.
+The following example uses invented addresses and the SHA-256 of four ASCII bytes `ABCD`;
+it is a synthetic layout illustration, not a game profile:
+
+```json
+{
+  "kind": "unit_pool_inspection",
+  "schema_version": 1,
+  "game_id": "synthetic-game",
+  "patch_id": "synthetic-patch",
+  "emulator_version": "synthetic-emulator",
+  "map_label": "synthetic map",
+  "pool_address": 142610432,
+  "pool_capacity": 3,
+  "pool_stride": 104,
+  "actor_owner_address": 142614528,
+  "actor_node_array_address": 142622720,
+  "actor_stride": 16,
+  "actor_capacity": 4,
+  "actor_vtable": 142626816,
+  "evidence_ids": ["synthetic-layout-v1"],
+  "code_anchors": [{
+    "address": 142622720,
+    "size": 4,
+    "sha256": "e12e115acf4552b2568b55e93cbd39394c4ef81c82447fafc997882a02d23677"
+  }]
+}
+```
+
+A matching manifest uses exact keys:
+
+```json
+{
+  "kind": "inspection_spans",
+  "schema_version": 1,
+  "spans": [
+    {"address": 142610432, "path": "pool.bin"},
+    {"address": 142614528, "path": "owner.bin"},
+    {"address": 142618624, "path": "actors.bin"},
+    {"address": 142622720, "path": "anchor.bin"}
+  ]
+}
+```
+
+Binary files must contain coherent supplied bytes for the declared layout: here pool.bin
+is312bytes, owner.bin28bytes, actors.bin64bytes and anchor.bin is `ABCD`. The owner header
+supplies the actor-data pointer; it must point to the captured actors window. Required
+windows must fit entirely inside one supplied span; gaps, overlap and implicit concatenation
+are rejected. Paths resolve relative to the manifest. Limits are32spans,64KiB per span and
+1MiB total. Addresses are unsigned integer PSP addresses; pool/actor/owner pointers are
+four-byte aligned. All binary fields are unsigned little-endian. Strict keys, identity,
+code hashes and alias counts are checked before a report is accepted.
+
+Reports say `candidate_slots_only` with `user_supplied_spans_and_profile` provenance.
+They expose raw state words and pixel pairs, sorted actor bindings, ambiguity pointer sets
+and exclusion counts. Slot indexes are local to this supplied observation. HP/EN/SP, names,
+absolute tiles, sides, phase, dimensions, terrain and legal actions remain undecoded.
+Raw state groups are not faction enums. Supplied fingerprints and matching alias counts
+cannot authenticate live identity, coherent capture timing or a complete tactical roster.
+All live/autonomous capability flags remain false; `run` stays disabled.
+
+This command reads regular local files only. It does not parse .ppst files, scan full RAM,
+launch/control PPSSPP or fetch missing bytes. See the
+[approved binary and JSON contracts](superpowers/specs/2026-10-16-unit-pool-inspection-design.md).
+
+16 October retained-data geometry verification: private `map_inspection` profiles now use
+code-backed direct tile fields and dimensions across three maps (69/12/26 candidate records).
+The existing CLI reports coordinates with `named_records_only` provenance and all live/tactical
+capabilities false. This does not change the structural unit-pool report or add an automatic
+geometry profile. See the [geometry evidence](research/2026-10-16-map-geometry.md) and
+[plain-language progress summary](research/2026-10-16-map-evidence-summary.md).
+
+### Current-form representative inspection (offline)
+
+The `representative_inspection` profile kind under `inspect-map` resolves one representative
+per structural candidate by reconstructing the source recipe and checking the cached set.
+It reports mech/pilot IDs, current/max HP and EN, current SP, DEF, MOB and HIT. It preserves
+all existing `map_inspection` and `unit_pool_inspection` behavior; use the structural kind
+when you want every alias rather than a selected representative.
+
+```
+python -m psp_buddy inspect-map --config local/your-config.json --records local/your-spans.json
+```
+
+The configuration's `profile_path` selects a strict version1 `representative_inspection`
+JSON descriptor. It contains the unchanged nested `pool_profile`, source/cache/selector/
+exclusion global addresses, declared mech/pilot descriptor regions, one or two12-byte-node
+regions, evidence references and code-anchor SHA-256 hashes. See the exact field and recipe
+contract in `docs/superpowers/specs/2026-10-16-representative-inspection-design.md`; all
+addresses/hashes must describe your supplied evidence, not guessed values.
+
+The separate records manifest has this shape (addresses and paths here are synthetic):
+
+```json
+{"kind":"representative_spans","schema_version":1,"spans":[
+  {"address":142671872,"path":"captured-window.bin"}
+]}
+```
+
+Relative paths resolve from the manifest directory. Supply1..128regular unlinked binary
+files, each at most64KiB and at most1MiB together, with nonoverlapping captured RAM windows.
+A partial example alone is insufficient: every descriptor/code/table/record window needed
+by the recipe must be present. Unsupported/missing/inconsistent data returns error status2,
+with no partial success or live memory fallback. Old manifest kinds retain their old limits.
+
+Output includes a `representatives` array, source/cache/reconstructed counts, supplied-span
+hashes and explicit unavailable fields. Names, MV, positions, sides, terrain and legal
+actions remain unavailable. Raw SP does not establish how shared crews can spend it.
+Slot/object/actor identifiers belong to the observation, not the campaign. Supplied profiles
+and hashes do not authenticate live identity or capture timing. All live/tactical/autonomous
+capability flags remain false; `run` remains disabled. The MVP has no Transform action;
+form changes were used only to corroborate the reader's selected-record semantics.
+
+### Robot tile positions (offline)
+
+Use profile kind `positioned_representative_inspection` to add `tile_x`/`tile_y` to each
+selected robot and `dimensions: {width,height}` to the report. Coordinates are zero-based:
+X must be less than width and Y less than height. These describe the supplied capture,
+not a newly authenticated live emulator state.
+
+The exact descriptor contains `kind`, `schema_version:1`, `representative_profile` (a
+complete unchanged representative descriptor) and `geometry`. Geometry contains the
+aligned `width_address`/`height_address`,1..16code anchors (`address,size,sha256`) and
+`evidence_ids`. See `docs/superpowers/specs/2026-10-16-positioned-inspection-design.md`.
+All addresses and fingerprint hashes come from your captured evidence. The existing
+`representative_spans` manifest and inspect-map command remain the same. Existing profiles
+continue to return their original output; coordinates require the explicit new kind.
+
+Missing/out-of-bounds fields reject the whole report with status2. Captured dimensions
+are bounded to1024cells; this inspector does not read a terrain/occupancy grid. Positions
+and statistics do not establish reachability, targets, side or action legality. Every
+live/tactical/autonomous capability stays false, and no Transform action is added.
+
+### Ally/Foe menu membership (offline)
+
+Use descriptor kind `menu_membership_inspection` under the same `inspect-map --config ...
+--records ...` command to extend positioned robot records with menu membership. Output rows
+retain form/pilot IDs, stats and tiles, adding `raw_menu_group_byte`, `menu_category_index`
+and `menu_membership`: `ally_menu`, `foe_menu`, or `outside_ally_foe_menus`. Counts distinguish
+all four categories and the Ally/Foe/outside totals. Wing Zero is outside both observed menus;
+this does not label it neutral or nonhostile. Tactical `side` remains unavailable.
+
+The strict version1 descriptor has these exact keys:
+
+- `kind`, `schema_version`, `positioned_profile`: complete unchanged positioned descriptor.
+- `menu_mask_table_address`: aligned captured address of four little-endian u32 masks.
+- `expected_category_masks`: four nonzero16-bit values, disjoint and covering all16supported
+  group bits; captured values must match exactly.
+- `ally_category_index`, `foe_category_index`: distinct0..3 indices, explicitly backed by
+  your menu-label evidence. They are not inferred from robot counts or UI instance slots.
+- `code_anchors`, `evidence_ids`: query/producer fingerprints and bounded evidence references.
+
+For a synthetic mapping, masks `[1,2,4,65528]` partition all16bits; indices0/1 name their
+first two categories. Supply your own captured addresses, matching fingerprints and complete
+nested profile rather than treating this synthetic example as a game profile. Existing
+`representative_spans` limits and file safeguards apply; existing kinds/output remain unchanged.
+
+The decoder fingerprints the expected readonly table and combines it with the query, nested
+recipe and geometry fingerprints using the existing32-entry/16KiB budget. Raw group values
+outside0..15 are unsupported and reject the report, including values that the underlying
+MIPS shift would wrap. Missing/inconsistent evidence returns status2 without partial output,
+live fallback or game input. `label_source` explicitly states `user_supplied_menu_label_mapping`;
+profile references and counts do not authenticate a live roster. All live/tactical/autonomous
+flags stay false. Name decoding, MV, actions, terrain, hostility and diplomatic changes remain
+outside this report's verified scope.
+
+## Offline End Phase counters
+
+Use `inspect-map` with descriptor kind `end_phase_inspection` to extend the menu report
+with `counter_value` (0..3), `end_phase_count_scope` and `counted_as_unmoved` on each row.
+The aggregate `unmoved_unit_count` counts scoped actors with positive counters; counter2
+counts once. `displayed_unmoved_unit_count` reproduces the UI count modulo100.
+`end_phase_scope_count` counts all actors in that scope, including counter0.
+
+Exact descriptor keys: `kind`, `schema_version` (1), `menu_membership_profile` (complete
+existing descriptor), `code_anchors` and `evidence_ids`. Supply defining aggregate,
+resolver and UI evidence fingerprints; inherited combined32-anchor/16KiB limits apply.
+There are no configurable counter offsets or count masks. The supported raw group0
+count scope differs from the Ally-menu category. Enabled related-actor cases outside
+the validated fallback recipe, null objects or missing/mismatched captures reject.
+
+This reports the game's End Phase prompt counter. It does not establish whose turn it
+is, whether Move or Attack is legal, or which action consumes the counter. All live and
+autonomous capabilities remain false. No emulator connection or new capture is performed.

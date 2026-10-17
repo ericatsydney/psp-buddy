@@ -185,11 +185,32 @@ class DebuggerAdapter:
                     exc.add_note(f"debugger cleanup failed: {cleanup_error}")
                 raise
 
-    async def _exchange(self, event: str, params: Mapping[str, object]) -> dict[str, object]:
-        _validate(event, params)
+    def _original_code_scope(self) -> None:
+        if (self._pause_owner is not asyncio.current_task()
+                or not self._operation_lock.locked() or self.pause_status is not True
+                or self._assert_bound is None):
+            raise RuntimeError("original code requires an owned, bound observation pause")
+
+    async def _exchange(self, event: str, params: Mapping[str, object], *,
+                        original_code: bool = False) -> dict[str, object]:
+        if original_code:
+            self._original_code_scope()
+            address, size = params.get("address"), params.get("size")
+            if (event != "memory.read" or set(params) != {"address", "size", "replacements"}
+                    or params.get("replacements") is not False
+                    or not _bounded_integer(address, 0x08800000, 0x09FFFFFC)
+                    or not _bounded_integer(size, 4, 4096)):
+                raise ValueError("invalid original code window")
+            assert isinstance(address, int) and isinstance(size, int)
+            if address % 4 or size % 4 or address + size > 0x0A000000:
+                raise ValueError("invalid original code window")
+        else:
+            _validate(event, params)
         if self.uncertain and event not in {"input.buttons.send", "cpu.status", "cpu.resume"}:
             raise RuntimeError("transport outcome uncertain; further actions prohibited")
         async with self._io_lock:
+            if original_code:
+                self._original_code_scope()
             # A preceding queued request may have failed while this caller waited.
             if self.uncertain and event not in {"input.buttons.send", "cpu.status", "cpu.resume"}:
                 raise RuntimeError("transport outcome uncertain; further actions prohibited")
@@ -197,7 +218,8 @@ class DebuggerAdapter:
             ticket = str(self._ticket)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
-                    if (event in {"input.buttons.press", "cpu.stepping", "cpu.resume"}
+                    if ((original_code or event in {
+                            "input.buttons.press", "cpu.stepping", "cpu.resume"})
                             and self._assert_bound is not None):
                         try:
                             await asyncio.to_thread(self._assert_bound)
@@ -205,6 +227,8 @@ class DebuggerAdapter:
                             self.uncertain = True
                             self.pause_status = None
                             raise
+                    if original_code:
+                        self._original_code_scope()
                     await self.transport.send(json.dumps({**params, "event": event,
                                                           "ticket": ticket}))
                     if event in {"cpu.stepping", "cpu.resume"}:
@@ -266,6 +290,35 @@ class DebuggerAdapter:
         if len(data) != size:
             raise ValueError("memory response length mismatch")
         return data
+
+    async def read_original_code(self, address: int, size: int) -> bytes:
+        """Read a bounded original instruction view only within the caller's owned pause."""
+        # Validate before any I/O; public request() never receives this private capability.
+        if (not _bounded_integer(address, 0x08800000, 0x09FFFFFC)
+                or not _bounded_integer(size, 4, 4096)
+                or address % 4 or size % 4 or address + size > 0x0A000000):
+            raise ValueError("invalid original code window")
+        self._original_code_scope()
+        try:
+            response = await self._exchange(
+                "memory.read", {"address": address, "size": size, "replacements": False},
+                original_code=True,
+            )
+            encoded = response.get("base64")
+            if not isinstance(encoded, str):
+                raise ValueError("invalid memory base64")
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("invalid memory base64") from exc
+            if len(data) != size:
+                raise ValueError("memory response length mismatch")
+            return data
+        except (TimeoutError, ConnectionError, OSError, asyncio.CancelledError,
+                ValueError, RuntimeError):
+            self.uncertain = True
+            self.pause_status = None
+            raise
 
     async def _release(self) -> None:
         if self._held:

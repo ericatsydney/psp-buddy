@@ -1,5 +1,16 @@
 # PSP Buddy: autonomous battle MVP
 
+## Approved scope revision — 17 October 2026
+
+The user limited MVP player-unit commands to Move and/or Attack. Repair (healing), all
+Spirit commands including Trust, Supply, Transform and crew changes are excluded. This
+supersedes the older healing requirements below. Unknown healing capabilities/SP do not
+block Move/Attack planning; existing HP retreat safety remains. Prior Wait/End Turn and
+enemy-response orchestration remains under its existing gates. The concrete approved
+change is [Move/Attack scope](2026-10-17-move-attack-mvp-design.md). No live action is
+made available by this revision.
+
+
 Date: 10 October 2026
 
 Status: written specification approved by the user on 10 October 2026

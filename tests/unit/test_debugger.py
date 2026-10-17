@@ -296,3 +296,86 @@ def test_nested_press_fails_promptly_and_observation_resumes():
         assert not transport.stepping
         assert not any(x["event"] == "input.buttons.press" for x in transport.sent)
     asyncio.run(scenario())
+
+
+def test_original_code_read_requires_owned_pause_and_preserves_public_false_rejection():
+    from psp_buddy.debugger import DebuggerAdapter
+    async def scenario():
+        transport = FakeTransport()
+        adapter = DebuggerAdapter(transport)
+        adapter._assert_bound = lambda: None
+        with pytest.raises(RuntimeError):
+            await adapter.read_original_code(0x08800000, 4)
+        assert transport.sent == []
+        async with adapter.observation_pause():
+            assert await adapter.read_original_code(0x08800000, 4) == b"abcd"
+            reads = [m for m in transport.sent if m["event"] == "memory.read"]
+            assert reads[-1]["replacements"] is False
+            with pytest.raises(ValueError):
+                await adapter.request("memory.read", {
+                    "address": 0x08800000, "size": 4, "replacements": False})
+            with pytest.raises(RuntimeError):
+                await asyncio.create_task(adapter.read_original_code(0x08800000, 4))
+            assert await adapter.read_memory(0x08800000, 4) == b"abcd"
+            assert transport.sent[-1]["replacements"] is True
+        assert not transport.stepping
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("address,size", [(True, 4), (0x08800001, 4), (0x08800000, True),
+    (0x087FFFFC, 4), (0x09FFFFFC, 8), (0x08800000, 0), (0x08800000, 6), (0x08800000, 4100)])
+def test_original_code_invalid_bounds_never_transmit(address, size):
+    from psp_buddy.debugger import DebuggerAdapter
+    async def scenario():
+        transport = FakeTransport()
+        adapter = DebuggerAdapter(transport)
+        adapter._assert_bound = lambda: None
+        async with adapter.observation_pause():
+            before = len(transport.sent)
+            with pytest.raises(ValueError):
+                await adapter.read_original_code(address, size)
+            assert len(transport.sent) == before
+    asyncio.run(scenario())
+
+
+def test_original_code_rechecks_scope_at_queued_dispatch():
+    from psp_buddy.debugger import DebuggerAdapter
+    async def scenario():
+        transport = FakeTransport()
+        adapter = DebuggerAdapter(transport)
+        adapter._assert_bound = lambda: None
+        async with adapter.observation_pause():
+            await adapter._io_lock.acquire()
+            def lose_scope():
+                adapter._pause_owner = None
+                adapter._io_lock.release()
+            asyncio.get_running_loop().call_soon(lose_scope)
+            with pytest.raises(RuntimeError):
+                await adapter.read_original_code(0x08800000, 4)
+            assert not any(m["event"] == "memory.read" for m in transport.sent)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fault", ["unbound", "unpaused", "short", "error"])
+def test_original_code_identity_pause_and_response_fail_closed(fault):
+    from psp_buddy.debugger import DebuggerAdapter
+    async def scenario():
+        transport = FakeTransport()
+        adapter = DebuggerAdapter(transport)
+        adapter._assert_bound = lambda: None
+        async with adapter.observation_pause():
+            if fault == "unbound":
+                adapter._assert_bound = None
+            if fault == "unpaused":
+                adapter.pause_status = False
+            if fault == "short":
+                transport.memory = b"abc"
+            if fault == "error":
+                transport.error.add("memory.read")
+            with pytest.raises((RuntimeError, ValueError)):
+                await adapter.read_original_code(0x08800000, 4)
+            if fault in ("unbound", "unpaused"):
+                assert not any(m["event"] == "memory.read" for m in transport.sent)
+            else:
+                assert adapter.uncertain
+    asyncio.run(scenario())
