@@ -18,11 +18,11 @@ from .launch import LaunchSession
 from .navigation_mailbox import NavigationRefused
 
 MAX_TAPS = 16
-MAX_ACTION_TAPS = 24
+MAX_ACTION_TAPS = 40
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
 CONTEXTS = ("map", "unit_commands", "info", "move_range", "weapon_list", "target_select",
-            "attack_forecast")
+            "attack_forecast", "result")
 ACTION_CONTEXTS = ("unit_commands", "move_range", "weapon_list", "target_select",
                    "attack_forecast")
 # purpose -> (allowed buttons, allowed screen contexts, extra required key)
@@ -31,7 +31,8 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "menu_direction": (DIRECTIONS, ("unit_commands",), None),
     "open_unit_menu": (("circle",), ("map",), "cursor_tile"),
     "open_info": (("circle",), ("unit_commands",), "highlighted_entry"),
-    "cancel": (("cross",), ("info",) + ACTION_CONTEXTS, None),
+    "cancel": (("cross",), ("info", "move_range", "weapon_list", "target_select",
+                            "attack_forecast"), None),
     "open_move": (("circle",), ("unit_commands",), "highlighted_entry"),
     "move_cursor": (DIRECTIONS, ("move_range",), None),
     "confirm_move": (("circle",), ("move_range",), "destination_tile"),
@@ -41,9 +42,11 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "choose_target": (("circle",), ("target_select",), "target_name"),
     "confirm_attack": (("start",), ("attack_forecast",), "target_name"),
     "standby_after_move": (("circle",), ("unit_commands",), "highlighted_entry"),
+    "dismiss_result": (("circle",), ("result",), None),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
-                   "select_target", "choose_target", "confirm_attack", "standby_after_move")
+                   "select_target", "choose_target", "confirm_attack", "standby_after_move",
+                  "dismiss_result")
 ENTRIES = {"open_info": "Info", "open_move": "Move", "open_attack": "Attack",
            "standby_after_move": "Standby"}
 BASE_KEYS = {"sequence", "screen_file", "screen_sha256", "context"}
@@ -100,7 +103,8 @@ class InfoNavigation:
         if value is None:
             return None
         actions = value.get("actions")
-        if (actions not in (["move"], ["move", "standby"], ["attack"], ["attack_recon"])
+        if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
+                           ["attack_recon"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -125,6 +129,11 @@ class InfoNavigation:
             raise ValueError("no action declaration for this trial")
         actions = decl["actions"]
         assert isinstance(actions, list)
+        if purpose == "dismiss_result":
+            # Decision-free "Get Result" box; only exists after a declared attack.
+            if "attack" not in self._done:
+                raise ValueError("no declared attack has been confirmed")
+            return
         if purpose == "standby_after_move":
             if "standby" not in actions or "move" not in self._done or "standby" in self._done:
                 raise ValueError("Standby is not permitted at this point")
@@ -138,6 +147,8 @@ class InfoNavigation:
                                        "choose_target", "confirm_attack") else "move"
         if kind not in actions:
             raise ValueError("action not declared for this trial")
+        if kind == "attack" and "move" in actions and "move" not in self._done:
+            raise ValueError("the declared move must be confirmed before attacking")
         if purpose == "confirm_move":
             tile = arguments["destination_tile"]
             if not self._tile(tile) or tile != decl["destination_tile"] or "move" in self._done:
@@ -225,7 +236,7 @@ class InfoNavigation:
         name = self._frame(arguments)
         if arguments["button"] in ("circle", "start") and name in self._stale:
             raise ValueError("a confirming input requires a fresh screenshot")
-        if self._uses.get(name, 0) >= (1 if arguments["button"] in ("circle", "start") else 2):
+        if self._uses.get(name, 0) >= (1 if arguments["button"] in ("circle", "start") else 4):
             raise ValueError("screenshot already used; a fresh frame is required")
         return name, purpose
 

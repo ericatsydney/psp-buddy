@@ -8,9 +8,9 @@ import { Server } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/s
 import { StdioServerTransport } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js';
 
-const CONTEXTS = ['map','unit_commands','info','move_range','weapon_list','target_select','attack_forecast'];
-const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move'];
-const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move'];
+const CONTEXTS = ['map','unit_commands','info','move_range','weapon_list','target_select','attack_forecast','result'];
+const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move','dismiss_result'];
+const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result'];
 function validate(operation, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid arguments');
   const common = ['sequence','screen_file','screen_sha256','context'];

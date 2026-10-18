@@ -132,3 +132,15 @@ Destiny EN230 -> 230 -> 195 (35 EN cost), counter_value 1,1 -> 0, counted_as_unm
 The support attacker row (object 149303496, (18,5)) EN235 -> 175. The foe's HP 10507 did not change, so the shot missed.
 So: attack cost is charged on Start; the action-finished counter clears at attack end (no Standby needed); forecast/target stages leave memory unchanged.
 PPSSPP left open on the map. Next: damage/hit-case observation (a hitting attack), enemy phase, End Turn handling.
+
+## Z Gundam move + Beam Rifle attack — PASSED (zatk-run-20261018T2120)
+
+New in code (TDD, 1338 unit + 172 helper tests pass): `["move","attack"]` declarations (move must precede attack), 40-tap budget,
+directional frames shared 4 times, acting unit chosen from the declaration (`Z Gundam` = object 149303912), `observe` reports `unit` and
+`changes` vs baseline. Fresh backups backups/zatk-original-config-20261018T100104Z-*; agent closed PPSSPP itself (Exit prompt Yes).
+34 agent steps: Z (18,13) -> Move to (14,15) -> Attack, Beam Rifle (2~4, ammo 9/10), target Euclid (97% shown, counter 49%, Taurus support defender) -> Start.
+Stage memory (1 baseline, 2 move preview, 3 forecast, 4 combat result dialog, 5 after dialog):
+Z HP 4700,4700,4700,1119,1119; EN 128,122,122,122,122; tile (18,13) then (14,15); counter_value 1,1,1,1,0 (unmoved flag clears only after the result dialog is dismissed).
+Euclid HP 5211 throughout, EN 89 -> 74 (its counter fire); Taurus (support defender, SDef) HP 2603 -> 450 so the defender absorbed the Beam Rifle hit.
+Kamille EXP +30 on the Get Result box. A "Get Result" dialog needs a confirm press: I sent one plain X key via PowerShell (outside the bridge allowlist);
+a proper `dismiss_result` purpose is still to implement. PPSSPP is open on the map, Z at HP1119.

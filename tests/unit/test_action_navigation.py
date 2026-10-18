@@ -125,10 +125,10 @@ def test_budget_and_observe_non_terminal(owned, tmp_path):
     service, transport, frame, stages = setup(owned, tmp_path)
 
     async def scenario():
-        for seq in range(1, 25):
+        for seq in range(1, 41):
             await press(service, frame, seq, 'move_range', 'move_cursor', button='up')
         with pytest.raises(ValueError):
-            await press(service, frame, 25, 'move_range', 'move_cursor', button='up')
+            await press(service, frame, 41, 'move_range', 'move_cursor', button='up')
     asyncio.run(scenario())
     service, _, frame, stages = setup(owned, tmp_path)
 
@@ -181,3 +181,84 @@ def test_attack_recon_allows_viewing_but_never_confirming(owned, tmp_path):
 def test_recon_declaration_is_exact(owned, tmp_path, bad):
     with pytest.raises(ValueError):
         setup(owned, tmp_path, bad)
+
+
+MOVE_ATTACK = {'unit': 'Z Gundam', 'actions': ['move', 'attack'], 'destination_tile': [14, 15],
+               'weapon_name': 'Beam Rifle', 'target_name': 'tile(12,17)'}
+
+
+def test_move_then_attack_flow_and_ordering(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, MOVE_ATTACK)
+
+    async def scenario():
+        await press(service, frame, 1, 'unit_commands', 'open_move', highlighted_entry='Move')
+        # attack steps are refused until the declared move is confirmed
+        with pytest.raises(ValueError):
+            await press(service, frame, 2, 'unit_commands', 'open_attack',
+                        highlighted_entry='Attack')
+        await press(service, frame, 2, 'move_range', 'confirm_move', destination_tile=[14, 15])
+        with pytest.raises(ValueError):  # Standby was not declared
+            await press(service, frame, 3, 'unit_commands', 'standby_after_move',
+                        highlighted_entry='Standby')
+        await press(service, frame, 3, 'unit_commands', 'open_attack',
+                    highlighted_entry='Attack')
+        await press(service, frame, 4, 'weapon_list', 'select_weapon', weapon_name='Beam Rifle')
+        await press(service, frame, 5, 'target_select', 'choose_target',
+                    target_name='tile(12,17)')
+        await press(service, frame, 6, 'attack_forecast', 'confirm_attack', button='start',
+                    target_name='tile(12,17)')
+    asyncio.run(scenario())
+
+
+def test_budget_is_forty_and_directional_frames_shared_four_times(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, MOVE_ATTACK)
+
+    async def scenario():
+        shared = frame('move_range', sequence=1, button='down', duration=2,
+                       purpose='move_cursor')
+        for seq in range(1, 5):
+            args = dict(shared, sequence=seq)
+            await service.execute('press', args)
+        with pytest.raises(ValueError):
+            await service.execute('press', dict(shared, sequence=5))
+        for seq in range(5, 41):
+            await press(service, frame, seq, 'move_range', 'move_cursor', button='up')
+        with pytest.raises(ValueError):
+            await press(service, frame, 41, 'move_range', 'move_cursor', button='up')
+    asyncio.run(scenario())
+
+
+def test_dismiss_result_only_after_a_declared_attack(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, ATTACK)
+
+    async def scenario():
+        with pytest.raises(ValueError):  # nothing has been attacked yet
+            await press(service, frame, 1, 'result', 'dismiss_result')
+        await press(service, frame, 1, 'unit_commands', 'open_attack',
+                    highlighted_entry='Attack')
+        await press(service, frame, 2, 'weapon_list', 'select_weapon', weapon_name='Beam Rifle')
+        await press(service, frame, 3, 'target_select', 'choose_target', target_name='Zaku')
+        await press(service, frame, 4, 'attack_forecast', 'confirm_attack', button='start',
+                    target_name='Zaku')
+        with pytest.raises(ValueError):  # wrong context / button
+            await press(service, frame, 5, 'map', 'dismiss_result')
+        with pytest.raises(ValueError):
+            await press(service, frame, 5, 'result', 'dismiss_result', button='start')
+        await press(service, frame, 5, 'result', 'dismiss_result')
+    asyncio.run(scenario())
+
+
+def test_dismiss_result_refused_in_recon_and_without_declaration(owned, tmp_path):
+    for declaration in (RECON, None):
+        service, transport, frame, _ = setup(owned, tmp_path, declaration)
+        with pytest.raises(ValueError):
+            asyncio.run(press(service, frame, 1, 'result', 'dismiss_result'))
+        assert not transport.sent
+
+
+@pytest.mark.parametrize('context', ['unit_commands', 'result'])
+def test_cancel_not_allowed_on_command_menu_or_result(owned, tmp_path, context):
+    service, transport, frame, _ = setup(owned, tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, context, 'cancel', button='cross'))
+    assert not transport.sent
