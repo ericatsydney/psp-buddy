@@ -8,14 +8,14 @@ import { Server } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/s
 import { StdioServerTransport } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js';
 
-const CONTEXTS = ['map','unit_commands','info','move_range','weapon_list','target_select','attack_forecast','result'];
-const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move','dismiss_result'];
-const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result'];
+const CONTEXTS = ['map','unit_commands','info','move_range','weapon_list','target_select','attack_forecast','result','system_menu','enemy_phase'];
+const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move','dismiss_result','open_system_menu','system_menu_move','end_turn','advance_dialog'];
+const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result','open_system_menu','end_turn','advance_dialog'];
 function validate(operation, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid arguments');
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : common;
-  if (!['press','verify','observe'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
+  if (!['press','verify','observe','dump'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
       !common.every(k=>Object.hasOwn(args,k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
       typeof args.screen_file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) ||
       !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') || !CONTEXTS.includes(args.context)) throw new Error('Invalid navigation evidence');
@@ -32,7 +32,7 @@ function validate(operation, args) {
     if (args.destination_tile !== undefined && (!Array.isArray(args.destination_tile) || args.destination_tile.length!==2 || !args.destination_tile.every(Number.isSafeInteger))) throw new Error('Invalid destination tile');
     for (const k of ['weapon_name','target_name']) if (args[k] !== undefined && (typeof args[k] !== 'string' || args[k].length > 64)) throw new Error('Invalid name');
     if (args.cursor_tile !== undefined && (!Array.isArray(args.cursor_tile) || args.cursor_tile.length!==2 || !args.cursor_tile.every(Number.isSafeInteger))) throw new Error('Invalid cursor tile');
-    if (args.highlighted_entry !== undefined && !['Info','Move','Attack','Standby'].includes(args.highlighted_entry)) throw new Error('Invalid highlighted entry');
+    if (args.highlighted_entry !== undefined && (typeof args.highlighted_entry !== 'string' || args.highlighted_entry.length < 1 || args.highlighted_entry.length > 64)) throw new Error('Invalid highlighted entry');
   }
 }
 
@@ -139,13 +139,14 @@ export function createNavigationServer(client) {
   const server = new Server({ name: 'protected-ppsspp-navigation', version: '1.0.0' }, { capabilities: { tools: {} } });
   const common = {sequence:{type:'integer',minimum:1},screen_file:{type:'string'},screen_sha256:{type:'string',pattern:'^[0-9a-f]{64}$'},context:{enum:CONTEXTS}};
   const tools = [
-    {name:'ppsspp_press_button',description:'One protected, screenshot-grounded input; battle actions only when declared for this trial.',inputSchema:{type:'object',properties:{...common,button:{enum:['up','down','left','right','circle','cross','start']},duration:{type:'integer',minimum:1,maximum:3},purpose:{enum:PURPOSES},cursor_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},highlighted_entry:{enum:['Info','Move','Attack','Standby']},destination_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},weapon_name:{type:'string',maxLength:64},target_name:{type:'string',maxLength:64}},required:[...Object.keys(common),'button','duration','purpose'],additionalProperties:false}},
+    {name:'ppsspp_press_button',description:'One protected, screenshot-grounded input; battle actions only when declared for this trial.',inputSchema:{type:'object',properties:{...common,button:{enum:['up','down','left','right','circle','cross','start']},duration:{type:'integer',minimum:1,maximum:3},purpose:{enum:PURPOSES},cursor_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},highlighted_entry:{type:'string',minLength:1,maxLength:64},destination_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},weapon_name:{type:'string',maxLength:64},target_name:{type:'string',maxLength:64}},required:[...Object.keys(common),'button','duration','purpose'],additionalProperties:false}},
     {name:'ppsspp_observe',description:'Save one raw coherent memory sample for the current stage; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
+    {name:'ppsspp_dump_ram',description:'Save one read-only dump of PSP user RAM for offline comparison; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

@@ -12,7 +12,7 @@ with protected progress, up to three checkpoint retries, and handover when neede
 - [ ] Start from an in-game save or save state automatically.
 - [ ] Read the complete current battle state automatically.
 - [ ] Follow tactical instructions and choose legal actions in a live battle.
-- [ ] Move and attack automatically.
+- [ ] Move and attack automatically. (Prototype: agent executes a declared, screenshot-grounded Move/Attack/Standby; it does not yet choose targets or plan.)
 - [ ] Handle enemy reactions and recognized decision-free dialogue automatically.
 - [ ] Save/load a live checkpoint and retry defeats automatically.
 - [ ] Complete a battle and hand control back safely.
@@ -28,10 +28,10 @@ We are learning how the game stores its statistics, lists, positions and action 
 - [x] Decode Ally/Foe menu membership from retained captures (not full tactical allegiance).
 - [x] Decode map dimensions and unit positions from retained captures.
 - [x] Observe a human-controlled Move/Attack and its resource/position changes.
-- [ ] Establish memory rules for Move/Attack availability and finished actions.
-- [ ] Understand weapon availability, range, targeting and battle forecasts.
+- [x] Establish memory rules for finished actions after Move/Standby/Attack (observed on Destiny and Z Gundam; Move/Attack availability itself still unverified).
+- [x] Understand weapon availability, range, targeting and forecasts (rules derived from screens plus the hit-chance field; availability and damage memory fields not decoded).
 - [ ] Establish phase, movement/terrain and enemy-reaction rules needed for live play.
-- [ ] Validate automatic screenshot collection to reduce manual work.
+- [x] Validate automatic screenshot collection (PowerShell Debug > Take screenshot, agent-only; GPU/MCP capture still unavailable).
 - [x] Agent-triggered built-in screenshots, without human uploads (protected live check).
 
 The on-demand MCP bridge is implemented and passes offline checks; protected live capture
@@ -45,7 +45,7 @@ remains unverified. Review findings are resolved.
 - [x] Implement on-demand MCP capture and verify its offline components.
 - [x] Try one protected live MCP screenshot and preserve the failure evidence.
 - [x] Validate agent-triggered built-in capture in a fresh protected trial.
-- [ ] Resume Destiny Move/Standby and compare action-state memory.
+- [x] Resume Destiny Move/Standby and compare action-state memory (agent-driven, passed).
 
 The overnight run stopped during initial baseline with a debugger connection close;
 no Destiny action stages were accepted. On 18 October, no PPSSPP process/window remained.
@@ -144,3 +144,34 @@ Z HP 4700,4700,4700,1119,1119; EN 128,122,122,122,122; tile (18,13) then (14,15)
 Euclid HP 5211 throughout, EN 89 -> 74 (its counter fire); Taurus (support defender, SDef) HP 2603 -> 450 so the defender absorbed the Beam Rifle hit.
 Kamille EXP +30 on the Get Result box. A "Get Result" dialog needs a confirm press: I sent one plain X key via PowerShell (outside the bridge allowlist);
 a proper `dismiss_result` purpose is still to implement. PPSSPP is open on the map, Z at HP1119.
+
+## Short-term A — weapons, range, targeting, forecasts (18 Oct, runs wrec-run-20261018T2230 + zrec-run-20261018T2315)
+
+New read-only bridge operation `ppsspp_dump_ram` (24 MB user RAM, 0x08800000-0x0A000000, hashed, never overwritten; 24 per trial).
+Findings (all agent-driven, view-only, nothing confirmed):
+- Hover hit chance lives in two s32 at 0x08ED055C and 0x08ED0560: 42 (Mercurius, 4400 gun), 61 (Vayeate), 47 (Mercurius, 3200 gun,
+  weapon +5 HT) match the on-screen HIT%; -10000 when the cursor is on a non-target (own unit); 24 while idle in menus. Weapon list index
+  candidate: u8 at 0x08E397A8 (0..4, count 5 next to it).
+- Weapon screen: "ReqEN --- N" shows the weapon cost (--- = ammo weapon) and the unit's current EN; it is not a requirement.
+- Availability (greying) is consistent with: ammo/EN available AND (not moved OR weapon has the P flag) AND at least one candidate
+  target in the weapon's range. Evidence: Z at its start has only Grenade (1~5, foe at distance 5) usable; after moving to (14,15)
+  Grenade (no P flag) is greyed while Vulcan/Beam Rifle (P) are usable; Destiny at its start has all five usable (range test appears
+  to count the neutral Wing Gundam Zero, HIT 0%). The memory field for availability was not isolated (the dump differences are UI
+  buffer noise), and damage/counter forecast fields were not decoded. Range preview = blue overlay; invalid cursor target = -10000.
+
+## Short-term B — phase and enemy reaction (18-19 Oct; runs sys-run-20261018T2350, end-run-20261019T0020)
+
+New in code (TDD; 1181 tests, Ruff, mypy, Node pass): `system_recon` / `end_turn` declarations, purposes `open_system_menu`
+(empty tile only, from the baseline occupancy), `system_menu_move`, `end_turn` (needs the declared label, once), `advance_dialog`
+(only after End Turn, max 30), `cancel` on the system menu; `ppsspp_dump_ram`.
+Findings (agent-driven, one protected End Turn, nothing saved):
+- System menu (circle on an empty tile): EndTurn (default), Search, Units, Mission, Report, System, Save; panel shows SR Points 8, Mode Normal,
+  Turn 7, Money; the terrain name of the cursor tile (here "Moon") shows top-left. End Turn asks "Unmoved Units: 20 unit/s - End phase? Y/No".
+- Enemy phase runs by itself with Skip animation; each enemy attack shows the two-sided battle forecast (Start highlighted; defender options
+  Def./Move/Support) and needs a Start press. Observed: Wing Gundam Zero (third force, HP1225) attacking Gundam 00, Taurus/Euclid supports
+  (66%/63%/73% hit), Vayeate vs Wing Gundam Zero (HIT 0%, NoAtk). Enemies attacked from their positions (no foe moved).
+- Phase change effect on memory (stage-01): allies' EN regenerated by +5 (9 units), +23/+25 (4 units), +0 (6 units at max EN); every ally
+  counter_value back to 1 (unmoved); foes unchanged; only HP change was Shenlong Gundam 4616 -> 3006 from the enemy attacks.
+- The turn counter field was not isolated (candidate array near 0x091BC40C varies 6..9, so it is not the counter). Terrain/movement costs were
+  not studied beyond the overlay shapes and the terrain label.
+PPSSPP is left open in turn 8 (player phase) on the disposable trial copy.

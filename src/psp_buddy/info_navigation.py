@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
@@ -19,10 +19,11 @@ from .navigation_mailbox import NavigationRefused
 
 MAX_TAPS = 16
 MAX_ACTION_TAPS = 40
+MAX_DUMPS = 24
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
 CONTEXTS = ("map", "unit_commands", "info", "move_range", "weapon_list", "target_select",
-            "attack_forecast", "result")
+            "attack_forecast", "result", "system_menu", "enemy_phase")
 ACTION_CONTEXTS = ("unit_commands", "move_range", "weapon_list", "target_select",
                    "attack_forecast")
 # purpose -> (allowed buttons, allowed screen contexts, extra required key)
@@ -32,7 +33,7 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "open_unit_menu": (("circle",), ("map",), "cursor_tile"),
     "open_info": (("circle",), ("unit_commands",), "highlighted_entry"),
     "cancel": (("cross",), ("info", "move_range", "weapon_list", "target_select",
-                            "attack_forecast"), None),
+                            "attack_forecast", "system_menu"), None),
     "open_move": (("circle",), ("unit_commands",), "highlighted_entry"),
     "move_cursor": (DIRECTIONS, ("move_range",), None),
     "confirm_move": (("circle",), ("move_range",), "destination_tile"),
@@ -43,10 +44,16 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "confirm_attack": (("start",), ("attack_forecast",), "target_name"),
     "standby_after_move": (("circle",), ("unit_commands",), "highlighted_entry"),
     "dismiss_result": (("circle",), ("result",), None),
+    "open_system_menu": (("circle",), ("map",), "cursor_tile"),
+    "system_menu_move": (DIRECTIONS, ("system_menu",), None),
+    "end_turn": (("circle",), ("system_menu",), "highlighted_entry"),
+    "advance_dialog": (("circle",), ("enemy_phase",), None),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
                    "select_target", "choose_target", "confirm_attack", "standby_after_move",
-                  "dismiss_result")
+                  "dismiss_result", "open_system_menu", "system_menu_move", "end_turn",
+                  "advance_dialog")
+SYSTEM_PURPOSES = ("open_system_menu", "system_menu_move", "end_turn", "advance_dialog")
 ENTRIES = {"open_info": "Info", "open_move": "Move", "open_attack": "Attack",
            "standby_after_move": "Standby"}
 BASE_KEYS = {"sequence", "screen_file", "screen_sha256", "context"}
@@ -70,6 +77,8 @@ class InfoNavigation:
         *,
         declaration: Mapping[str, object] | None = None,
         observe_stage: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
+        dump_ram: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
+        occupied_tiles: Iterable[tuple[int, int]] | None = None,
     ) -> None:
         session.assert_bound()
         if len(target_tile) != 2 or not all(_integer(n, 0, 1023) for n in target_tile):
@@ -81,6 +90,12 @@ class InfoNavigation:
         self._verify = verify_observer
         self._declaration = self._parse_declaration(declaration)
         self._observe_stage = observe_stage
+        self._dump_ram = dump_ram
+        self._occupied = None if occupied_tiles is None else {
+            (int(x), int(y)) for x, y in occupied_tiles}
+        self._menu_open = False
+        self._advances = 0
+        self._dumps = 0
         self._done: set[str] = set()
         self._weapon = False
         self._chosen = False
@@ -104,7 +119,7 @@ class InfoNavigation:
             return None
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
-                           ["attack_recon"])
+                           ["attack_recon"], ["system_recon"], ["end_turn"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -119,9 +134,39 @@ class InfoNavigation:
                 item = value.get(key)
                 if not isinstance(item, str) or not item or len(item) > 64:
                     raise ValueError("declaration needs weapon_name and target_name")
+        if "end_turn" in actions:
+            wanted.add("entry_label")
+            label = value.get("entry_label")
+            if not isinstance(label, str) or not label or len(label) > 64:
+                raise ValueError("declaration needs entry_label")
         if set(value) != wanted:
             raise ValueError("unexpected declaration fields")
         return dict(value)
+
+    def _check_system(self, purpose: str, arguments: Mapping[str, object],
+                      actions: list[object]) -> None:
+        recon, ending = "system_recon" in actions, "end_turn" in actions
+        if not (recon or ending):
+            raise ValueError("system-menu steps are not declared for this trial")
+        if purpose == "open_system_menu":
+            tile = arguments["cursor_tile"]
+            if not self._tile(tile) or self._occupied is None:
+                raise ValueError("system menu needs a known empty tile")
+            assert isinstance(tile, list)
+            if (int(tile[0]), int(tile[1])) in self._occupied:
+                raise ValueError("system menu needs a known empty tile")
+        elif purpose == "system_menu_move":
+            if not self._menu_open:
+                raise ValueError("system menu is not open")
+        elif purpose == "end_turn":
+            decl = self._declaration
+            assert decl is not None
+            if (not ending or not self._menu_open or "end_turn" in self._done
+                    or arguments["highlighted_entry"] != decl["entry_label"]):
+                raise ValueError("End Turn is not permitted here")
+        elif purpose == "advance_dialog":
+            if not ending or "end_turn" not in self._done or self._advances >= 30:
+                raise ValueError("nothing to advance")
 
     def _check_action(self, purpose: str, arguments: Mapping[str, object]) -> None:
         decl = self._declaration
@@ -129,6 +174,11 @@ class InfoNavigation:
             raise ValueError("no action declaration for this trial")
         actions = decl["actions"]
         assert isinstance(actions, list)
+        if purpose in SYSTEM_PURPOSES:
+            self._check_system(purpose, arguments, actions)
+            return
+        if "system_recon" in actions or "end_turn" in actions:
+            raise ValueError("this trial permits only system-menu steps")
         if purpose == "dismiss_result":
             # Decision-free "Get Result" box; only exists after a declared attack.
             if "attack" not in self._done:
@@ -197,7 +247,7 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe"):
+        if operation not in ("press", "verify", "observe", "dump"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -207,6 +257,10 @@ class InfoNavigation:
         if operation == "observe":
             if keys != BASE_KEYS or self._observe_stage is None or self._stages >= 40:
                 raise ValueError("observe requires a screenshot reference and a stage observer")
+            return self._frame(arguments), None
+        if operation == "dump":
+            if keys != BASE_KEYS or self._dump_ram is None or self._dumps >= MAX_DUMPS:
+                raise ValueError("dump requires a screenshot reference, a reader and budget")
             return self._frame(arguments), None
         if operation == "verify":
             if keys != BASE_KEYS or arguments["context"] != "info":
@@ -265,6 +319,13 @@ class InfoNavigation:
                 self._log({"sequence": sequence, "operation": "observe", "screen": name,
                            "context": arguments["context"], "stage": self._stages})
                 return {**staged, "sequence": sequence, "stage": self._stages}
+            if operation == "dump":
+                assert self._dump_ram is not None
+                self._dumps += 1
+                dumped = dict(await self._dump_ram(self._dumps))
+                self._log({"sequence": sequence, "operation": "dump", "screen": name,
+                           "context": arguments["context"], "dump": self._dumps})
+                return {**dumped, "sequence": sequence, "dump": self._dumps}
             if operation == "verify":
                 observed = dict(await self._verify())
                 self._finished = True
@@ -278,6 +339,15 @@ class InfoNavigation:
                 self._done.add("move")
             elif purpose == "standby_after_move":
                 self._done.add("standby")
+            elif purpose == "open_system_menu":
+                self._menu_open = True
+            elif purpose == "end_turn":
+                self._done.add("end_turn")
+                self._menu_open = False
+            elif purpose == "advance_dialog":
+                self._advances += 1
+            elif purpose == "cancel" and arguments["context"] == "system_menu":
+                self._menu_open = False
             elif purpose == "choose_target":
                 self._chosen = True
             elif purpose == "confirm_attack":

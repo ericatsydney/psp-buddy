@@ -29,8 +29,15 @@ def setup(owned, tmp_path, declaration=DECL):
         stages.append(n)
         return {'stage': n}
 
+    dumps = []
+
+    async def dump(n):
+        dumps.append(n)
+        return {'file': f'ram-{n:02d}.bin'}
+
     service = InfoNavigation(session, adapter, (19, 5), tmp_path / 'evidence', observe,
-                             declaration=declaration, observe_stage=stage)
+                             declaration=declaration, observe_stage=stage, dump_ram=dump,
+                             occupied_tiles=[(19, 5), (18, 4)])
     root = session.memstick_root / 'PSP/SCREENSHOT'
     root.mkdir(exist_ok=True)
     counter = [0]
@@ -262,3 +269,85 @@ def test_cancel_not_allowed_on_command_menu_or_result(owned, tmp_path, context):
     with pytest.raises(ValueError):
         asyncio.run(press(service, frame, 1, context, 'cancel', button='cross'))
     assert not transport.sent
+
+
+def test_dump_is_read_only_counted_and_bounded(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path)
+
+    async def scenario():
+        for n in range(1, 25):
+            result = await service.execute('dump', frame('map', sequence=n))
+            assert result['file'] == f'ram-{n:02d}.bin' and result['dump'] == n
+        with pytest.raises(ValueError):
+            await service.execute('dump', frame('map', sequence=25))
+    asyncio.run(scenario())
+    assert not transport.sent  # dumps send no input
+
+
+def test_dump_refused_without_a_dump_reader(owned, tmp_path):
+    from psp_buddy.info_navigation import InfoNavigation
+    service, transport, frame, _ = setup(owned, tmp_path)
+    bare = InfoNavigation(owned[0], service._adapter, (19, 5), tmp_path / 'e2',
+                          service._verify)
+    with pytest.raises(ValueError):
+        asyncio.run(bare.execute('dump', frame('map', sequence=1)))
+
+
+SYSTEM_RECON = {'unit': 'Destiny', 'actions': ['system_recon']}
+END_TURN = {'unit': 'Destiny', 'actions': ['end_turn'], 'entry_label': 'Phase End'}
+
+
+def test_system_recon_views_but_never_confirms(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, SYSTEM_RECON)
+
+    async def scenario():
+        with pytest.raises(ValueError):  # a unit is on this tile
+            await press(service, frame, 1, 'map', 'open_system_menu', cursor_tile=[19, 5])
+        await press(service, frame, 1, 'map', 'open_system_menu', cursor_tile=[3, 3])
+        await press(service, frame, 2, 'system_menu', 'system_menu_move', button='down')
+        for purpose, kwargs in (('end_turn', dict(highlighted_entry='Phase End')),
+                                ('open_move', dict(highlighted_entry='Move'))):
+            with pytest.raises(ValueError):
+                await press(service, frame, 3, 'system_menu', purpose, **kwargs)
+        await press(service, frame, 3, 'system_menu', 'cancel', button='cross')
+    asyncio.run(scenario())
+
+
+def test_system_menu_refused_without_declaration_or_occupancy(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, declaration=None)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, 'map', 'open_system_menu', cursor_tile=[3, 3]))
+    assert not transport.sent
+
+
+def test_end_turn_needs_label_menu_and_happens_once(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, END_TURN)
+
+    async def scenario():
+        with pytest.raises(ValueError):  # menu not opened yet
+            await press(service, frame, 1, 'system_menu', 'end_turn',
+                        highlighted_entry='Phase End')
+        with pytest.raises(ValueError):  # nothing to advance before End Turn
+            await press(service, frame, 1, 'enemy_phase', 'advance_dialog')
+        await press(service, frame, 1, 'map', 'open_system_menu', cursor_tile=[3, 3])
+        with pytest.raises(ValueError):  # wrong label
+            await press(service, frame, 2, 'system_menu', 'end_turn',
+                        highlighted_entry='Save')
+        await press(service, frame, 2, 'system_menu', 'end_turn',
+                    highlighted_entry='Phase End')
+        with pytest.raises(ValueError):  # only once
+            await press(service, frame, 3, 'system_menu', 'end_turn',
+                        highlighted_entry='Phase End')
+        await press(service, frame, 3, 'enemy_phase', 'advance_dialog')
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('bad', [
+    {'unit': 'Destiny', 'actions': ['end_turn']},
+    {'unit': 'Destiny', 'actions': ['end_turn', 'move'], 'entry_label': 'x',
+     'destination_tile': [1, 1]},
+    {'unit': 'Destiny', 'actions': ['system_recon'], 'entry_label': 'x'},
+])
+def test_system_declarations_are_exact(owned, tmp_path, bad):
+    with pytest.raises(ValueError):
+        setup(owned, tmp_path, bad)
