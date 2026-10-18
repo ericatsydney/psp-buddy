@@ -1,4 +1,16 @@
-# Save protection
+# Project instructions
+
+## Session progress reports
+
+Before starting work in a new chat or on a new day, read `docs/progress.md` and the
+latest handover. Give a short three-layer report: long-term goal and function
+checklist; short-term game-rule/memory investigation checklist; today/session goal.
+Tick only items ready within their stated scope. Keep blockers, test counts and
+technical details out of this routine report unless the user asks. Update the notes
+at session end. Use `docs/workflow.md` for research-efficiency and MCP lessons.
+This reporting preference does not remove verification or save-protection duties.
+
+## Save protection
 
 Before every trial or test that launches, controls, or changes PPSSPP or the game, create a fresh timestamped backup of both complete directories:
 

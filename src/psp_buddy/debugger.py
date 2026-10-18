@@ -191,8 +191,19 @@ class DebuggerAdapter:
                 or self._assert_bound is None):
             raise RuntimeError("original code requires an owned, bound observation pause")
 
+    def _render_scope(self) -> None:
+        if (self._pause_owner is not asyncio.current_task()
+                or not self._operation_lock.locked() or self.pause_status is not True
+                or self._assert_bound is None):
+            raise RuntimeError("render capture requires an owned, bound observation pause")
+
     async def _exchange(self, event: str, params: Mapping[str, object], *,
-                        original_code: bool = False) -> dict[str, object]:
+                        original_code: bool = False,
+                        render_capture: bool = False) -> dict[str, object]:
+        if render_capture:
+            self._render_scope()
+            if event != "gpu.buffer.renderColor" or dict(params) != {"type": "uri"}:
+                raise ValueError("invalid render capture command")
         if original_code:
             self._original_code_scope()
             address, size = params.get("address"), params.get("size")
@@ -211,6 +222,8 @@ class DebuggerAdapter:
         async with self._io_lock:
             if original_code:
                 self._original_code_scope()
+            if render_capture:
+                self._render_scope()
             # A preceding queued request may have failed while this caller waited.
             if self.uncertain and event not in {"input.buttons.send", "cpu.status", "cpu.resume"}:
                 raise RuntimeError("transport outcome uncertain; further actions prohibited")
@@ -218,7 +231,7 @@ class DebuggerAdapter:
             ticket = str(self._ticket)
             try:
                 async with asyncio.timeout(self.timeout_seconds):
-                    if ((original_code or event in {
+                    if ((original_code or render_capture or event in {
                             "input.buttons.press", "cpu.stepping", "cpu.resume"})
                             and self._assert_bound is not None):
                         try:
@@ -229,6 +242,8 @@ class DebuggerAdapter:
                             raise
                     if original_code:
                         self._original_code_scope()
+                    if render_capture:
+                        self._render_scope()
                     await self.transport.send(json.dumps({**params, "event": event,
                                                           "ticket": ticket}))
                     if event in {"cpu.stepping", "cpu.resume"}:
@@ -320,6 +335,23 @@ class DebuggerAdapter:
             self.pause_status = None
             raise
 
+    async def read_render_png(self) -> dict[str, object]:
+        """Acquire one render-color PNG URI within the caller's bound observation pause.
+
+        The capture service validates the returned image before accepting it as evidence.
+        Transport and protocol failures prohibit subsequent captures; never retry here.
+        """
+        self._render_scope()
+        try:
+            return await self._exchange(
+                "gpu.buffer.renderColor", {"type": "uri"}, render_capture=True,
+            )
+        except (TimeoutError, ConnectionError, OSError, asyncio.CancelledError,
+                ValueError, RuntimeError):
+            self.uncertain = True
+            self.pause_status = None
+            raise
+
     async def _release(self) -> None:
         if self._held:
             await self._exchange(
@@ -360,7 +392,7 @@ class DebuggerAdapter:
             self._control_ticket = None
 
     @asynccontextmanager
-    async def observation_pause(self) -> AsyncIterator[None]:
+    async def observation_pause(self) -> AsyncIterator[tuple[bool, bool]]:
         if self._pause_owner is asyncio.current_task():
             raise RuntimeError("nested observation scope prohibited")
         async with self._operation_lock:
@@ -370,7 +402,7 @@ class DebuggerAdapter:
                 if owns_pause:
                     await self._transition("cpu.stepping", True)
                 self._pause_owner = asyncio.current_task()
-                yield
+                yield stepping, paused
             finally:
                 self._pause_owner = None
                 await self._release()

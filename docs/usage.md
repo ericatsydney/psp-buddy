@@ -446,3 +446,58 @@ the validated fallback recipe, null objects or missing/mismatched captures rejec
 This reports the game's End Phase prompt counter. It does not establish whose turn it
 is, whether Move or Attack is legal, or which action consumes the counter. All live and
 autonomous capabilities remain false. No emulator connection or new capture is performed.
+
+## On-demand protected MCP capture
+
+The project-owned `tools/ppsspp_capture_mcp.mjs` bridge exposes exactly one MCP tool:
+`ppsspp_capture_screen({"reason":"new command menu needs visual verification"})`.
+It returns local PNG/metadata paths, not image bytes in chat. It does not poll the screen,
+send game input or connect to PPSSPP. Use retained evidence and memory first; request a
+screen for a new UI fact, ambiguous state, required forecast or visible milestone.
+
+The Python `DemandCapture` service uses the existing launch-bound debugger adapter and
+its observation lock. It requests `gpu.buffer.renderColor` with `type: "uri"`, verifies
+the PNG and dimensions, rejects blank output and records trial/sequence/hash/timestamps
+and pause-state evidence. Identical images from distinct successful acquisitions remain
+distinct evidence. A capture does not establish atomic screen/RAM timing or game legality.
+Transport, restoration or capture errors disable the operation; there is no reconnect,
+output-framebuffer fallback or automatic retry.
+
+Activation is deliberately separate from offline verification. The current private
+Destiny helper must not be hot-patched or joined by a competing controller. After normal
+human closure, use a fresh protected launch with complete verified original/portable
+saves/states/configuration backups. The private reviewed entrypoint is
+`local/move-attack-trial-20261017/capture_handoff.py`; it uses the existing approved
+Launcher and Standby diagnostic. After its initial baseline passes, `capture-ready.json`
+in the run's evidence directory gives the exact `mailbox_root` and `trial_id`.
+
+An MCP client can then start the stdio server with:
+
+```text
+node tools/ppsspp_capture_mcp.mjs <mailbox_root> <trial_id>
+```
+
+The bridge imports the already-installed pinned SDK under `local/mcp-ppsspp/node_modules`.
+It is a local research integration, not a standalone wheel entrypoint. A fresh checkout
+needs that dependency and sanitized private helper setup; private profiles, saves and RAM
+evidence remain excluded from Git. No automatic MCP registration is enabled by this change.
+Mailbox requests/results are bounded, trial-bound and atomic; one request can be pending.
+Each capture requires a nonempty reason. Live image/backend acceptance remains unverified
+until a protected trial confirms the actual game screen, pause behavior and save preservation.
+
+18 October live result: one protected MCP renderColor request returned "Could not download
+output"; the helper disabled further reads and accepted no image. PNG URI handling is
+implemented, but GPU/MCP image acceptance has not passed. In a separate freshly backed-up
+trial, the agent used supported Computer Use menu navigation (observed Debug menu, Take
+screenshot) and collected a valid built-in JPEG without a human upload. This is an
+agent-triggered fallback, not unattended runtime capture. Use accessibility text for menu
+navigation and capture only meaningful new/ambiguous game screens. See the current handover.
+
+Offline verification includes:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp local/pytest-capture-unique
+node --test tests/node/capture_mcp.test.mjs
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m mypy src/psp_buddy
+```
