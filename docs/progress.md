@@ -1,6 +1,6 @@
 # Project progress
 
-Updated 18 October 2026 (Australia/Brisbane).
+Updated 19 October 2026 (Australia/Brisbane).
 Ticks mean ready in the scope stated; unchecked items may have partial implementation.
 
 ## 1. Long-term goal
@@ -30,7 +30,7 @@ We are learning how the game stores its statistics, lists, positions and action 
 - [x] Observe a human-controlled Move/Attack and its resource/position changes.
 - [x] Establish memory rules for finished actions after Move/Standby/Attack (observed on Destiny and Z Gundam; Move/Attack availability itself still unverified).
 - [x] Understand weapon availability, range, targeting and forecasts (rules derived from screens plus the hit-chance field; availability and damage memory fields not decoded).
-- [ ] Establish phase, movement/terrain and enemy-reaction rules needed for live play.
+- [x] Establish phase, movement/terrain and enemy-reaction rules needed for live play (scope: terrain class, move-cost field, turn counter and enemy phase behaviour located; movement costs for other terrain/unit types unverified).
 - [x] Validate automatic screenshot collection (PowerShell Debug > Take screenshot, agent-only; GPU/MCP capture still unavailable).
 - [x] Agent-triggered built-in screenshots, without human uploads (protected live check).
 
@@ -175,3 +175,18 @@ Findings (agent-driven, one protected End Turn, nothing saved):
 - The turn counter field was not isolated (candidate array near 0x091BC40C varies 6..9, so it is not the counter). Terrain/movement costs were
   not studied beyond the overlay shapes and the terrain label.
 PPSSPP is left open in turn 8 (player phase) on the disposable trial copy.
+
+
+## Short-term B, part 2 — turn counter, terrain, move cost (19 Oct; run mv-run-20261019T0900 + offline diffs of 20 dumps)
+
+- Turn counter: u16 at 0x08DF8ADC (7 during turn 7 and through the whole enemy phase, 8 once the new player phase starts); the u16 next
+  to it at 0x08DF8ADE goes 0x96 -> 0x97 (probably a running total). It is the only address that read 7 in all 16 turn-7 dumps and 8 in the turn-8 dump.
+- Terrain: the map cell table (16-byte cells at 0x08E4EA94, index Y*24+X, map 24x34) byte +0 is the terrain class: 1 = open space,
+  2 = asteroid belts (diagonal bands, rows 13-29, matching the brown rocks on screen), 18 (0x12) = the debris/nebula area at the top-left
+  (rows 0-7). Byte +9 is only a cached classification near units (not terrain), as the 16 Oct notes warned.
+- Move range: while a unit's Move range is shown, cell byte +12 holds the accumulated move cost of every reachable tile (Z Gundam at
+  (18,13): 1 beside it up to 6 at the rim, 0 elsewhere), matching the red overlay tile for tile (own-unit sprite tiles hide the overlay).
+  Z Gundam paid 1 per tile through asteroid tiles, so asteroids add no extra cost for it; costs for other terrain/unit types are unverified.
+- Tooling fix: the PowerShell screenshot helper now forces PPSSPP to the foreground (Alt tap + SetForegroundWindow, verified) before Alt+D, t;
+  the first attempt this session sent no input because another window had the foreground (no game input was sent).
+PPSSPP is left open on Z Gundam's command menu (turn 7 start, trial copy). Nothing was confirmed.
