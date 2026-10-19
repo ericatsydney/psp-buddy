@@ -18,12 +18,13 @@ function validate(operation, args) {
     return;
   }
   const common = ['sequence','screen_file','screen_sha256','context'];
-  const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : common;
-  if (!['press','verify','observe','dump','state'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
+  const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : operation === 'goto' ? [...common,'target'] : common;
+  if (!['press','verify','observe','dump','state','goto'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
       !common.every(k=>Object.hasOwn(args,k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
       typeof args.screen_file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) ||
       !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') || !CONTEXTS.includes(args.context)) throw new Error('Invalid navigation evidence');
   if (operation === 'verify' && args.context !== 'info') throw new Error('Info context required');
+  if (operation === 'goto' && (args.context !== 'map' || !Array.isArray(args.target) || args.target.length !== 2 || !args.target.every(Number.isSafeInteger))) throw new Error('goto needs the map context and an integer [x,y] target');
   if (operation === 'press') {
     if (!['up','down','left','right','circle','cross','start'].includes(args.button) || !Number.isSafeInteger(args.duration) || args.duration<1 || args.duration>3 ||
         !PURPOSES.includes(args.purpose)) throw new Error('Invalid bounded input');
@@ -147,11 +148,12 @@ export function createNavigationServer(client) {
     {name:'ppsspp_observe',description:'Save one raw coherent memory sample for the current stage; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_dump_ram',description:'Save one read-only dump of PSP user RAM for offline comparison; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_read_state',description:'Read units, map terrain/cost, cursor tile and turn from memory; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
+    {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_goto_tile:'goto'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

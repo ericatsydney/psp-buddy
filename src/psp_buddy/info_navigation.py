@@ -1,5 +1,6 @@
 """Bounded, screenshot-grounded cursor and Info-menu navigation (no battle commands)."""
 
+import asyncio
 import hashlib
 import io
 import json
@@ -21,6 +22,11 @@ MAX_TAPS = 16
 MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
 MAX_STATE_READS = 200
+MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
+MAX_GOTO_STEPS = 80
+MAX_GOTO_JUMP = 40
+GOTO_LONG_HOLD = 14                 # frames; a long hold repeats the cursor move unpredictably
+GOTO_LONG_FROM = 10**9              # OFF: live test 19 Oct overshot/jumped, taps are reliable
 MAX_RESPONSE_BYTES = 15000          # the mailbox limit is 16384 including its envelope
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
@@ -82,6 +88,9 @@ class InfoNavigation:
         dump_ram: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         occupied_tiles: Iterable[tuple[int, int]] | None = None,
         read_state: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
+        read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
+        map_size: tuple[int, int] | None = None,
+        poll_seconds: float = 0.05,
     ) -> None:
         session.assert_bound()
         if len(target_tile) != 2 or not all(_integer(n, 0, 1023) for n in target_tile):
@@ -95,6 +104,10 @@ class InfoNavigation:
         self._observe_stage = observe_stage
         self._dump_ram = dump_ram
         self._read_state = read_state
+        self._read_cursor = read_cursor
+        self._map_size = map_size
+        self._poll = poll_seconds
+        self._goto_presses = 0
         self._state_reads = 0
         self._occupied = None if occupied_tiles is None else {
             (int(x), int(y)) for x, y in occupied_tiles}
@@ -252,7 +265,7 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe", "dump", "state"):
+        if operation not in ("press", "verify", "observe", "dump", "state", "goto"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -269,6 +282,8 @@ class InfoNavigation:
             if keys != BASE_KEYS or self._observe_stage is None or self._stages >= 40:
                 raise ValueError("observe requires a screenshot reference and a stage observer")
             return self._frame(arguments), None
+        if operation == "goto":
+            return self._check_goto(arguments, keys), None
         if operation == "dump":
             if keys != BASE_KEYS or self._dump_ram is None or self._dumps >= MAX_DUMPS:
                 raise ValueError("dump requires a screenshot reference, a reader and budget")
@@ -308,6 +323,62 @@ class InfoNavigation:
     def _budget(self) -> int:
         return MAX_ACTION_TAPS if self._declaration else MAX_TAPS
 
+    def _check_goto(self, arguments: Mapping[str, object], keys: set[str]) -> str:
+        if (keys != BASE_KEYS | {"target"} or self._read_cursor is None
+                or self._map_size is None or arguments["context"] != "map"):
+            raise ValueError("goto needs a map-context screenshot, a target and a cursor reader")
+        target = arguments["target"]
+        width, height = self._map_size
+        if not (isinstance(target, list) and len(target) == 2
+                and all(type(n) is int for n in target)
+                and 0 <= target[0] < width and 0 <= target[1] < height):
+            raise ValueError("goto target is outside the map")
+        return self._frame(arguments)
+
+    async def _goto(self, target: list[int]) -> dict[str, object]:
+        """Walk the map cursor to the target, verifying every step from the cursor field."""
+        assert self._read_cursor is not None
+        x, y = await self._read_cursor()
+        needed = abs(target[0] - x) + abs(target[1] - y)
+        if self._goto_presses + needed > MAX_GOTO_PRESSES:
+            raise NavigationRefused("cursor press budget for this trial is exhausted")
+        presses, stalls, unexpected = 0, 0, False
+        while (x, y) != (target[0], target[1]) and presses < MAX_GOTO_STEPS:
+            if x != target[0]:
+                button, delta, remaining = (("right", (1, 0), target[0] - x) if target[0] > x
+                                            else ("left", (-1, 0), x - target[0]))
+            else:
+                button, delta, remaining = (("down", (0, 1), target[1] - y) if target[1] > y
+                                            else ("up", (0, -1), y - target[1]))
+            # Long holds repeat the cursor move, so use them for long distances; the loop below
+            # re-reads the cursor and corrects any overshoot.
+            await self._adapter.press(button, GOTO_LONG_HOLD if remaining >= GOTO_LONG_FROM else 2)
+            presses += 1
+            self._goto_presses += 1
+            moved = (x, y)
+            for _ in range(12):
+                moved = await self._read_cursor()
+                if moved != (x, y):
+                    break
+                await asyncio.sleep(self._poll)
+            if moved == (x, y):
+                stalls += 1
+                if stalls >= 2:
+                    break
+                continue
+            stalls = 0
+            steps = (moved[0] - x) * delta[0] + (moved[1] - y) * delta[1]    # along the move
+            sideways = (moved[0] - x) * delta[1] + (moved[1] - y) * delta[0]
+            x_old, y_old = x, y
+            x, y = moved
+            if steps < 1 or sideways != 0 or abs(x - x_old) + abs(y - y_old) > MAX_GOTO_JUMP:
+                unexpected = True
+                break
+        reached = (x, y) == (target[0], target[1])
+        return {"reached": reached, "cursor": {"x": x, "y": y}, "presses": presses,
+                "stalled": stalls >= 2, "unexpected_move": unexpected,
+                "goto_presses_used": self._goto_presses}
+
     def _log(self, record: dict[str, object]) -> None:
         self._evidence.mkdir(parents=True, exist_ok=True)
         with (self._evidence / "agent-navigation-inputs.jsonl").open("a", encoding="utf-8") as f:
@@ -324,6 +395,13 @@ class InfoNavigation:
         if name:
             self._uses[name] = self._uses.get(name, 0) + 1
         try:
+            if operation == "goto":
+                arguments_target = arguments["target"]
+                assert isinstance(arguments_target, list)
+                outcome = await self._goto([int(arguments_target[0]), int(arguments_target[1])])
+                self._log({"sequence": sequence, "operation": "goto", "screen": name,
+                           "target": arguments_target, **outcome})
+                return {**outcome, "sequence": sequence}
             if operation == "state":
                 assert self._read_state is not None
                 self._state_reads += 1

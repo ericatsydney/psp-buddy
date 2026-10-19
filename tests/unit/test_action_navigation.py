@@ -418,3 +418,139 @@ def test_state_refusal_and_oversize_keep_the_session_usable(owned, tmp_path):
         assert result['turn'] == 7 and result['sequence'] == 1 and result['state_read'] == 1
     asyncio.run(scenario())
     assert (tmp_path / 'e4' / 'agent-navigation-inputs.jsonl').exists()   # the good read is logged
+
+
+class SimCursor:
+    """A map cursor that moves one tile per directional press, clamped to the map."""
+
+    def __init__(self, x=17, y=4, width=24, height=34, stuck=False):
+        self.x, self.y, self.width, self.height, self.stuck = x, y, width, height, stuck
+        self.presses = []
+
+    async def press(self, button, duration=1):
+        self.presses.append(button)
+        self.durations = getattr(self, 'durations', []) + [duration]
+        if self.stuck:
+            return {}
+        dx, dy = {'left': (-1, 0), 'right': (1, 0), 'up': (0, -1), 'down': (0, 1)}[button]
+        steps = 1 if duration < 8 else max(1, duration // 4)     # a long hold repeats the move
+        self.x = min(max(self.x + dx * steps, 0), self.width - 1)
+        self.y = min(max(self.y + dy * steps, 0), self.height - 1)
+        return {}
+
+    async def read(self):
+        return self.x, self.y
+
+
+def goto_service(owned, tmp_path, sim):
+    from psp_buddy.info_navigation import InfoNavigation
+
+    async def verify():
+        return {}
+    session, _ = owned
+    service = InfoNavigation(session, sim, (19, 5), tmp_path / 'evidence', verify,
+                             read_cursor=sim.read, poll_seconds=0, map_size=(24, 34))
+    root = session.memstick_root / 'PSP/SCREENSHOT'
+    root.mkdir(exist_ok=True)
+    counter = [0]
+
+    def frame(context='map', **extra):
+        counter[0] += 1
+        path = root / f'g{counter[0]}.png'
+        data = picture()
+        path.write_bytes(data)
+        return dict(screen_file=path.name, screen_sha256=hashlib.sha256(data).hexdigest(),
+                    context=context, **extra)
+    return service, frame
+
+
+def test_goto_walks_x_then_y_and_verifies_each_step(owned, tmp_path):
+    sim = SimCursor(17, 4)
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[19, 7])))
+    assert result['reached'] is True and result['cursor'] == {'x': 19, 'y': 7}
+    assert sim.presses == ['right', 'right', 'down', 'down', 'down'] and result['presses'] == 5
+    assert set(sim.durations) == {2}                       # taps only by default
+
+
+def test_goto_when_already_there_presses_nothing(owned, tmp_path):
+    sim = SimCursor(5, 5)
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[5, 5])))
+    assert result['reached'] is True and sim.presses == []
+
+
+def test_goto_stops_when_the_cursor_does_not_move(owned, tmp_path):
+    sim = SimCursor(17, 4, stuck=True)       # e.g. a menu has the focus
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[20, 4])))
+    assert result['reached'] is False and result['stalled'] is True
+    assert len(sim.presses) <= 2
+
+
+@pytest.mark.parametrize('extra', [
+    dict(target=[24, 0], context='map'),                 # outside the 24x34 map
+    dict(target=[1, 1], context='unit_commands'),        # not the map context
+    dict(target=[True, 1], context='map'),
+    dict(target=[1], context='map'),
+    dict(target=[1, 1, 1], context='map'),
+])
+def test_goto_refuses_bad_targets_before_any_press(owned, tmp_path, extra):
+    sim = SimCursor(17, 4)
+    service, frame = goto_service(owned, tmp_path, sim)
+    with pytest.raises(ValueError):
+        asyncio.run(service.execute('goto', frame(sequence=1, **extra)))
+    assert sim.presses == []
+
+
+def test_goto_refused_without_a_cursor_reader_and_budget_is_bounded(owned, tmp_path):
+    from psp_buddy.info_navigation import InfoNavigation
+    sim = SimCursor(0, 0)
+    service, frame = goto_service(owned, tmp_path, sim)
+
+    async def scenario():
+        # The cursor-press budget (400 per trial) is bounded: eventually a walk is refused.
+        refused = False
+        for n in range(1, 200):
+            try:
+                target = [23, 33] if n % 2 else [0, 0]
+                await service.execute('goto', frame(sequence=n, target=target))
+            except ValueError:
+                refused = True
+                break
+        assert refused and n > 3
+    asyncio.run(scenario())
+    bare = InfoNavigation(owned[0], sim, (19, 5), tmp_path / 'e5', lambda: None)
+    with pytest.raises(ValueError):
+        asyncio.run(bare.execute('goto', frame(sequence=1, target=[1, 1])))
+
+
+def test_goto_long_holds_mechanism_when_enabled_corrects_overshoot(owned, tmp_path, monkeypatch):
+    import psp_buddy.info_navigation as nav
+    monkeypatch.setattr(nav, 'GOTO_LONG_FROM', 6)          # disabled by default (see the constant)
+    sim = SimCursor(0, 0)
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[22, 31])))
+    assert result['reached'] is True and result['cursor'] == {'x': 22, 'y': 31}
+    assert max(sim.durations) > 2                          # long holds were used
+    assert result['presses'] < 22 + 31                     # fewer presses than one per tile
+    assert not result['unexpected_move']
+
+
+def test_goto_flags_a_move_along_the_wrong_axis(owned, tmp_path):
+    class Diagonal(SimCursor):
+        async def press(self, button, duration=1):
+            await super().press(button, duration)
+            self.y = min(self.y + 1, self.height - 1)      # sideways drift
+
+    sim = Diagonal(5, 5)
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[9, 5])))
+    assert result['reached'] is False and result['unexpected_move'] is True
+
+
+def test_goto_defaults_to_reliable_taps_for_long_distances(owned, tmp_path):
+    sim = SimCursor(0, 0)
+    service, frame = goto_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('goto', frame(sequence=1, target=[22, 31])))
+    assert result['reached'] is True and result['presses'] == 22 + 31 and set(sim.durations) == {2}

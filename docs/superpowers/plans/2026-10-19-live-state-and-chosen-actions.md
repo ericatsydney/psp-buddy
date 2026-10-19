@@ -11,10 +11,10 @@ until the user asks. Every live trial uses fresh verified backups.
   tiles and screens, diff for the cursor tile (u16 pairs equal to the known tile in each dump) and the
   active menu/context (command menu index, weapon index, system menu). Output: addresses plus a
   verification script. Exit: correct in at least 20 sampled states, a held-out set included.
-- [~] M2 (offline complete 19 Oct, live check pending) `read_state` operation. TDD in `src/psp_buddy` (state decoder with synthetic fixtures), mailbox/MCP
+- [x] M2 (offline + live check passed 19 Oct) `read_state` operation. TDD in `src/psp_buddy` (state decoder with synthetic fixtures), mailbox/MCP
   tool `ppsspp_read_state`, handoff reads rows, turn, cursor and the 0x4000-byte cell table in one pause.
   Exit: matches the retained observation for units and the cell table dump byte for byte.
-- [ ] M3 Macros without screenshots. `goto_tile` (cursor navigation closed loop), `select_unit`,
+- [~] M3 (goto_tile done, probe_move_range proven by hand, formal select_unit/probe macros pending) Macros without screenshots. `goto_tile` (cursor navigation closed loop), `select_unit`,
   `probe_move_range` (open Move, read cost field, cancel), with memory verification after each press.
   Exit: acceptance 2 and 3.
 - [ ] M4 Weapon and target probing. Locate the weapon table (names/range/ammo/flags) in RAM or keep the
@@ -56,3 +56,18 @@ assume). Each live trial: close PPSSPP, back up SYSTEM plus launcher snapshots, 
 - Known limits: units and map are two short reads, not one atomic snapshot; `reachable` is non-empty only while a Move range is shown
   but stale cost bytes outside that display are not flagged; running_total is not range-checked.
 - Live check (needs a protected trial): `ppsspp_read_state` on the real emulator, compared with a screenshot and a RAM dump in the same state.
+
+## M2 live check and M3 progress (19 Oct, runs st-run-20261019T1100 and gt-run-20261019T1140)
+
+- `ppsspp_read_state` live: turn 7, cursor (17,4) (matches the highlighted tile on screen), 26 units, 24x34 map, 8.9 KB response. Reachable
+  tiles are only meaningful right after a Move range is displayed (stale cost bytes exist otherwise: 73 non-zero tiles at game start).
+- `ppsspp_goto_tile` (new bridge operation `goto`, cursor presses only, max 400 per trial, every step verified from the cursor field):
+  10 of 10 random tiles reached with no screenshots, each cross-checked with a separate `read_state`; one visual check (screenshot) confirmed
+  tile (10,17). The camera scrolls with the cursor, so screen position is not a fixed function of the tile; the memory field is the reliable source.
+- Speed: about 0.8 s per tile (a 33-tile walk takes about 30 s). Long button holds (14 frames) were tried to go faster; they overshot or jumped
+  unpredictably, so they are OFF (`GOTO_LONG_FROM`), the mechanism is kept for later experiments. Last speed idea: presses sent faster than the
+  cursor animation, untested.
+- Probe by hand: goto Z Gundam, open the unit menu, open Move, `read_state`: 69 reachable tiles, max cost 6, identical to the dump-based result.
+  The final tap-only `goto` code was validated live in its earlier equivalent form (the post-refactor code passed all offline tests).
+- Remaining for M3: formal `select_unit` (goto + open menu) and `probe_move_range` (open Move, read, cancel) macros, then acceptance 3
+  (reachable tiles equal the screen overlay for two different units).
