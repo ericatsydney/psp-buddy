@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
+from . import battle_state
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
@@ -23,6 +24,7 @@ MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
 MAX_STATE_READS = 200
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
+MAX_PROBES = 60
 MAX_GOTO_STEPS = 80
 MAX_GOTO_JUMP = 40
 GOTO_LONG_HOLD = 14                 # frames; a long hold repeats the cursor move unpredictably
@@ -91,6 +93,8 @@ class InfoNavigation:
         read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
+        settle_seconds: float = 0.8,
+        ally_tiles: Iterable[tuple[int, int]] | None = None,
     ) -> None:
         session.assert_bound()
         if len(target_tile) != 2 or not all(_integer(n, 0, 1023) for n in target_tile):
@@ -108,6 +112,10 @@ class InfoNavigation:
         self._map_size = map_size
         self._poll = poll_seconds
         self._goto_presses = 0
+        self._settle = settle_seconds
+        self._ally_tiles = (None if ally_tiles is None
+                            else {(int(x), int(y)) for x, y in ally_tiles})
+        self._probes = 0
         self._state_reads = 0
         self._occupied = None if occupied_tiles is None else {
             (int(x), int(y)) for x, y in occupied_tiles}
@@ -137,7 +145,7 @@ class InfoNavigation:
             return None
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
-                           ["attack_recon"], ["system_recon"], ["end_turn"])
+                           ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -195,8 +203,8 @@ class InfoNavigation:
         if purpose in SYSTEM_PURPOSES:
             self._check_system(purpose, arguments, actions)
             return
-        if "system_recon" in actions or "end_turn" in actions:
-            raise ValueError("this trial permits only system-menu steps")
+        if "system_recon" in actions or "end_turn" in actions or "probe" in actions:
+            raise ValueError("this trial permits only its declared special steps")
         if purpose == "dismiss_result":
             # Decision-free "Get Result" box; only exists after a declared attack.
             if "attack" not in self._done:
@@ -265,7 +273,7 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe", "dump", "state", "goto"):
+        if operation not in ("press", "verify", "observe", "dump", "state", "goto", "probe_move"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -284,6 +292,8 @@ class InfoNavigation:
             return self._frame(arguments), None
         if operation == "goto":
             return self._check_goto(arguments, keys), None
+        if operation == "probe_move":
+            return self._check_probe(arguments, keys), None
         if operation == "dump":
             if keys != BASE_KEYS or self._dump_ram is None or self._dumps >= MAX_DUMPS:
                 raise ValueError("dump requires a screenshot reference, a reader and budget")
@@ -322,6 +332,56 @@ class InfoNavigation:
 
     def _budget(self) -> int:
         return MAX_ACTION_TAPS if self._declaration else MAX_TAPS
+
+    def _check_probe(self, arguments: Mapping[str, object], keys: set[str]) -> str:
+        decl = self._declaration
+        if (decl is None or decl["actions"] != ["probe"] or keys != BASE_KEYS | {"tile"}
+                or self._read_cursor is None or self._read_state is None
+                or self._map_size is None or self._ally_tiles is None
+                or arguments["context"] != "map" or self._probes >= MAX_PROBES):
+            raise ValueError("probe_move needs the probe declaration, readers and a map screenshot")
+        tile = arguments["tile"]
+        if not (self._tile(tile) and isinstance(tile, list)
+                and (tile[0], tile[1]) in self._ally_tiles):
+            raise ValueError("probe_move tile must be a living ally of the baseline")
+        return self._frame(arguments)
+
+    async def _probe_move(self, tile: list[int]) -> dict[str, object]:
+        """Walk to an ally, open its Move range, read costs from memory, back out (view only)."""
+        assert self._read_state is not None
+        walk = await self._goto(tile)
+        if not walk["reached"]:
+            return {"ok": False, "reason": "walk_did_not_reach_the_unit", "tile": tile,
+                    "walk": walk}
+        reachable: list[list[int]] = []
+        ok, reason = False, "range_not_centered_on_unit"
+        try:
+            for _ in range(2):          # circle opens the command menu, circle again picks Move
+                await self._adapter.press("circle", 2)
+                await asyncio.sleep(self._settle)
+            state = dict(await self._read_state(0))
+            raw: list[list[int]] = list(state.get("reachable") or [])  # type: ignore[call-overload]
+            grid = state.get("map")
+            if not raw and isinstance(grid, dict):
+                derived = battle_state.reachable_tiles({"cost_rows": grid["cost_rows"]})
+                raw = [[t["x"], t["y"], t["cost"]] for t in derived]
+            reachable = [[int(x), int(y), int(c)] for x, y, c in raw]
+            ok = self._centered(tile, reachable)
+        finally:
+            for _ in range(2):          # leave Move, then the command menu (nothing was confirmed)
+                await self._adapter.press("cross", 2)
+                await asyncio.sleep(self._settle)
+        return {"ok": ok, "reason": None if ok else reason, "tile": tile,
+                "reachable": reachable if ok else [], "walk": walk}
+
+    @staticmethod
+    def _centered(tile: list[int], reachable: list[list[int]]) -> bool:
+        """A fresh range is centred on the unit; stale costs from another unit fail this test."""
+        cost = {(x, y): c for x, y, c in reachable}
+        near = [pos for pos, c in cost.items() if c == 1]
+        return (bool(cost) and (tile[0], tile[1]) not in cost and bool(near)
+                and all(abs(x - tile[0]) + abs(y - tile[1]) == 1 for x, y in near)
+                and all(c >= abs(x - tile[0]) + abs(y - tile[1]) for (x, y), c in cost.items()))
 
     def _check_goto(self, arguments: Mapping[str, object], keys: set[str]) -> str:
         if (keys != BASE_KEYS | {"target"} or self._read_cursor is None
@@ -395,6 +455,14 @@ class InfoNavigation:
         if name:
             self._uses[name] = self._uses.get(name, 0) + 1
         try:
+            if operation == "probe_move":
+                probe_tile = arguments["tile"]
+                assert isinstance(probe_tile, list)
+                self._probes += 1
+                probed = await self._probe_move([int(probe_tile[0]), int(probe_tile[1])])
+                self._log({"sequence": sequence, "operation": "probe_move", "screen": name,
+                           "tile": probe_tile, "ok": probed["ok"], "reason": probed["reason"]})
+                return {**probed, "sequence": sequence}
             if operation == "goto":
                 arguments_target = arguments["target"]
                 assert isinstance(arguments_target, list)

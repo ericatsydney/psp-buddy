@@ -9,6 +9,13 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
+OPERATIONS = ("press", "verify", "observe", "dump", "state", "goto", "probe_move")
+
+
+def _deadline(operation: str) -> int:
+    return 10 if operation == "press" else 120 if operation in ("goto", "probe_move") else 60
+
+
 NavigationHandler = Callable[[str, dict[str, object]], Awaitable[dict[str, object]]]
 
 
@@ -109,7 +116,7 @@ class NavigationMailbox:
             arguments = data.get("arguments")
             if set(data) != {"trial_id", "request_id", "operation", "arguments"} or (
                 data.get("trial_id") != self.trial_id
-                or operation not in ("press", "verify", "observe", "dump", "state", "goto")
+                or operation not in OPERATIONS
                 or not isinstance(arguments, dict)
             ):
                 self._disabled = True
@@ -119,7 +126,7 @@ class NavigationMailbox:
             else:
                 try:
                     # The handler includes its own whole-investigation lock acquisition.
-                    async with asyncio.timeout(10 if operation == "press" else 60):
+                    async with asyncio.timeout(_deadline(str(operation))):
                         payload["result"] = await self._handler(str(operation), arguments)
                 except NavigationRefused as exc:
                     payload["error"] = f"refused: {str(exc)[:200]}"

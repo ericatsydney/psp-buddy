@@ -554,3 +554,112 @@ def test_goto_defaults_to_reliable_taps_for_long_distances(owned, tmp_path):
     service, frame = goto_service(owned, tmp_path, sim)
     result = asyncio.run(service.execute('goto', frame(sequence=1, target=[22, 31])))
     assert result['reached'] is True and result['presses'] == 22 + 31 and set(sim.durations) == {2}
+
+
+class SimGame(SimCursor):
+    """Cursor, unit menu and move range: circle on an ally opens the menu, again shows the range."""
+
+    def __init__(self, allies, radius=2, acted=(), **kw):
+        super().__init__(**kw)
+        self.allies, self.radius, self.acted = set(allies), radius, set(acted)
+        self.stage = 'map'
+        self.cost = {}                       # stale values persist, like the real cost field
+        self.log = []
+
+    async def press(self, button, duration=1):
+        self.log.append(button)
+        if button in ('left', 'right', 'up', 'down'):
+            if self.stage == 'map':
+                return await super().press(button, duration)
+            return {}
+        if button == 'circle':
+            if self.stage == 'map' and (self.x, self.y) in self.allies \
+                    and (self.x, self.y) not in self.acted:
+                self.stage = 'menu'
+            elif self.stage == 'menu':
+                self.stage = 'move'
+                self.cost = {(self.x + dx, self.y + dy): abs(dx) + abs(dy)
+                             for dx in range(-self.radius, self.radius + 1)
+                             for dy in range(-self.radius, self.radius + 1)
+                             if 0 < abs(dx) + abs(dy) <= self.radius
+                             and 0 <= self.x + dx < self.width and 0 <= self.y + dy < self.height}
+        elif button == 'cross':
+            self.stage = {'move': 'menu', 'menu': 'map'}.get(self.stage, 'map')
+        return {}
+
+    async def state(self, n):
+        return {'cursor': {'x': self.x, 'y': self.y},
+                'reachable': [[x, y, c] for (x, y), c in sorted(self.cost.items())]}
+
+
+def probe_service(owned, tmp_path, sim, declaration=None):
+    from psp_buddy.info_navigation import InfoNavigation
+
+    async def verify():
+        return {}
+    session, _ = owned
+    service = InfoNavigation(session, sim, (19, 5), tmp_path / 'evidence', verify,
+                             declaration=declaration or {'unit': 'Destiny', 'actions': ['probe']},
+                             read_cursor=sim.read, read_state=sim.state, poll_seconds=0,
+                             settle_seconds=0, map_size=(24, 34),
+                             ally_tiles=sim.allies, occupied_tiles=sim.allies)
+    root = session.memstick_root / 'PSP/SCREENSHOT'
+    root.mkdir(exist_ok=True)
+    counter = [0]
+
+    def frame(**extra):
+        counter[0] += 1
+        path = root / f'p{counter[0]}.png'
+        data = picture()
+        path.write_bytes(data)
+        return dict(screen_file=path.name, screen_sha256=hashlib.sha256(data).hexdigest(),
+                    context='map', **extra)
+    return service, frame
+
+
+def test_probe_move_reads_reachable_tiles_and_backs_out(owned, tmp_path):
+    sim = SimGame(allies={(5, 6), (9, 9)}, radius=2, x=4, y=4)
+    service, frame = probe_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('probe_move', frame(sequence=1, tile=[5, 6])))
+    assert result['ok'] is True and result['tile'] == [5, 6]
+    assert sorted(map(tuple, result['reachable'])) == sorted(
+        (x, y, c) for (x, y), c in sim.cost.items())
+    assert sim.stage == 'map'                       # backed out of both menus
+    assert sim.log[-2:] == ['cross', 'cross']
+
+
+def test_probe_move_rejects_stale_cost_data(owned, tmp_path):
+    sim = SimGame(allies={(5, 6), (9, 9)}, radius=2, acted={(9, 9)}, x=5, y=6)
+    service, frame = probe_service(owned, tmp_path, sim)
+    first = asyncio.run(service.execute('probe_move', frame(sequence=1, tile=[5, 6])))
+    assert first['ok'] is True
+    # (9,9) has already acted, so the menu never opens and the old range (centred on (5,6)) stays
+    second = asyncio.run(service.execute('probe_move', frame(sequence=2, tile=[9, 9])))
+    assert second['ok'] is False and second['reason'] == 'range_not_centered_on_unit'
+    assert sim.stage == 'map'
+
+
+@pytest.mark.parametrize('tile', [[1, 1], [24, 0], [True, 6], [5]])
+def test_probe_move_only_for_allies_before_any_press(owned, tmp_path, tile):
+    sim = SimGame(allies={(5, 6)}, x=4, y=4)
+    service, frame = probe_service(owned, tmp_path, sim)
+    with pytest.raises(ValueError):
+        asyncio.run(service.execute('probe_move', frame(sequence=1, tile=tile)))
+    assert sim.log == []
+
+
+def test_probe_move_needs_the_probe_declaration(owned, tmp_path):
+    sim = SimGame(allies={(5, 6)}, x=4, y=4)
+    service, frame = probe_service(owned, tmp_path, sim,
+                                   declaration={'unit': 'Destiny', 'actions': ['attack_recon']})
+    with pytest.raises(ValueError):
+        asyncio.run(service.execute('probe_move', frame(sequence=1, tile=[5, 6])))
+    assert sim.log == []
+
+
+def test_probe_move_reports_a_stalled_walk_without_menu_presses(owned, tmp_path):
+    sim = SimGame(allies={(5, 6)}, x=4, y=4, stuck=True)
+    service, frame = probe_service(owned, tmp_path, sim)
+    result = asyncio.run(service.execute('probe_move', frame(sequence=1, tile=[5, 6])))
+    assert result['ok'] is False and result['reason'] == 'walk_did_not_reach_the_unit'
+    assert 'circle' not in sim.log

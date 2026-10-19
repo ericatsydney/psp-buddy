@@ -14,7 +14,7 @@ until the user asks. Every live trial uses fresh verified backups.
 - [x] M2 (offline + live check passed 19 Oct) `read_state` operation. TDD in `src/psp_buddy` (state decoder with synthetic fixtures), mailbox/MCP
   tool `ppsspp_read_state`, handoff reads rows, turn, cursor and the 0x4000-byte cell table in one pause.
   Exit: matches the retained observation for units and the cell table dump byte for byte.
-- [~] M3 (goto_tile done, probe_move_range proven by hand, formal select_unit/probe macros pending) Macros without screenshots. `goto_tile` (cursor navigation closed loop), `select_unit`,
+- [x] M3 (goto_tile + probe_move_range done and verified live 19 Oct) Macros without screenshots. `goto_tile` (cursor navigation closed loop), `select_unit`,
   `probe_move_range` (open Move, read cost field, cancel), with memory verification after each press.
   Exit: acceptance 2 and 3.
 - [ ] M4 Weapon and target probing. Locate the weapon table (names/range/ammo/flags) in RAM or keep the
@@ -71,3 +71,17 @@ assume). Each live trial: close PPSSPP, back up SYSTEM plus launcher snapshots, 
   The final tap-only `goto` code was validated live in its earlier equivalent form (the post-refactor code passed all offline tests).
 - Remaining for M3: formal `select_unit` (goto + open menu) and `probe_move_range` (open Move, read, cancel) macros, then acceptance 3
   (reachable tiles equal the screen overlay for two different units).
+
+## M3 result (19 Oct)
+
+- `probe_move` bridge operation / MCP tool `ppsspp_probe_move_range` (declaration `["probe"]`, view only, max 60 per trial, walk timeout 120 s):
+  walks to a living ally of the baseline, presses circle twice (command menu, Move), reads the cost field with `read_state`, then crosses out
+  of both menus. A fresh range must be centred on the unit (own tile has no cost, every cost-1 tile adjacent, every cost >= distance); stale
+  costs from another unit fail with `range_not_centered_on_unit` (demonstrated live: 75 stale tiles from the previous probe).
+- Live (pr-run-20261019T1230): Z Gundam (18,13) 69 tiles max cost 6 (identical to the earlier dump-based set), Destiny (19,5) 87 tiles max
+  cost 7 (= its MV 7), third ally (17,16) 75 tiles max cost 6; all `ok`.
+- Acceptance 3 (ov-run-20261019T1310): Destiny's memory-derived set equals the on-screen red overlay on 526/526 compared tiles (tiles covered
+  by unit sprites excluded; a first colour threshold wrongly flagged 20 tiles over the dark nebula, fixed by a better threshold, not by the
+  data). Z Gundam matched tile for tile earlier. Acceptance 2 (10 random tiles) was met on 19 Oct.
+- Only OS-level SendKeys game buttons proved unreliable again (a second X was dropped); everything above used the guarded bridge.
+- Remaining plan: M4 weapon/target probing and hover hit chance, M5 `act` macro and instruction following, M6 review/docs.
