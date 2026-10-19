@@ -13,9 +13,13 @@ const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel
 const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result','open_system_menu','end_turn','advance_dialog'];
 function validate(operation, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid arguments');
+  if (operation === 'state') {
+    if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
+    return;
+  }
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : common;
-  if (!['press','verify','observe','dump'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
+  if (!['press','verify','observe','dump','state'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
       !common.every(k=>Object.hasOwn(args,k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
       typeof args.screen_file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) ||
       !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') || !CONTEXTS.includes(args.context)) throw new Error('Invalid navigation evidence');
@@ -142,11 +146,12 @@ export function createNavigationServer(client) {
     {name:'ppsspp_press_button',description:'One protected, screenshot-grounded input; battle actions only when declared for this trial.',inputSchema:{type:'object',properties:{...common,button:{enum:['up','down','left','right','circle','cross','start']},duration:{type:'integer',minimum:1,maximum:3},purpose:{enum:PURPOSES},cursor_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},highlighted_entry:{type:'string',minLength:1,maxLength:64},destination_tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},weapon_name:{type:'string',maxLength:64},target_name:{type:'string',maxLength:64}},required:[...Object.keys(common),'button','duration','purpose'],additionalProperties:false}},
     {name:'ppsspp_observe',description:'Save one raw coherent memory sample for the current stage; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_dump_ram',description:'Save one read-only dump of PSP user RAM for offline comparison; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
+    {name:'ppsspp_read_state',description:'Read units, map terrain/cost, cursor tile and turn from memory; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

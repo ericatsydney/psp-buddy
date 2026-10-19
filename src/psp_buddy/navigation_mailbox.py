@@ -109,7 +109,7 @@ class NavigationMailbox:
             arguments = data.get("arguments")
             if set(data) != {"trial_id", "request_id", "operation", "arguments"} or (
                 data.get("trial_id") != self.trial_id
-                or operation not in ("press", "verify", "observe", "dump")
+                or operation not in ("press", "verify", "observe", "dump", "state")
                 or not isinstance(arguments, dict)
             ):
                 self._disabled = True

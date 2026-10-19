@@ -20,6 +20,8 @@ from .navigation_mailbox import NavigationRefused
 MAX_TAPS = 16
 MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
+MAX_STATE_READS = 200
+MAX_RESPONSE_BYTES = 15000          # the mailbox limit is 16384 including its envelope
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
 CONTEXTS = ("map", "unit_commands", "info", "move_range", "weapon_list", "target_select",
@@ -79,6 +81,7 @@ class InfoNavigation:
         observe_stage: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         dump_ram: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         occupied_tiles: Iterable[tuple[int, int]] | None = None,
+        read_state: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
     ) -> None:
         session.assert_bound()
         if len(target_tile) != 2 or not all(_integer(n, 0, 1023) for n in target_tile):
@@ -91,6 +94,8 @@ class InfoNavigation:
         self._declaration = self._parse_declaration(declaration)
         self._observe_stage = observe_stage
         self._dump_ram = dump_ram
+        self._read_state = read_state
+        self._state_reads = 0
         self._occupied = None if occupied_tiles is None else {
             (int(x), int(y)) for x, y in occupied_tiles}
         self._menu_open = False
@@ -247,11 +252,17 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe", "dump"):
+        if operation not in ("press", "verify", "observe", "dump", "state"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
             raise ValueError("out-of-order navigation sequence")
+        if operation == "state":
+            # Pure memory read: no screenshot reference, no input.
+            if keys != {"sequence"} or self._read_state is None or (
+                    self._state_reads >= MAX_STATE_READS):
+                raise ValueError("state read needs only a sequence, a reader and budget")
+            return "", None
         if arguments.get("context") not in CONTEXTS:
             raise ValueError("invalid screen context")
         if operation == "observe":
@@ -310,8 +321,25 @@ class InfoNavigation:
         assert isinstance(arguments, dict)
         sequence = self._next
         self._next += 1
-        self._uses[name] = self._uses.get(name, 0) + 1
+        if name:
+            self._uses[name] = self._uses.get(name, 0) + 1
         try:
+            if operation == "state":
+                assert self._read_state is not None
+                self._state_reads += 1
+                try:
+                    state = dict(await self._read_state(self._state_reads))
+                    answer = {**state, "sequence": sequence, "state_read": self._state_reads}
+                    if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                        raise NavigationRefused("state is too large for the mailbox")
+                except NavigationRefused:
+                    # Memory reads are harmless: a refusal consumes neither sequence nor budget.
+                    self._next -= 1
+                    self._state_reads -= 1
+                    raise
+                self._log({"sequence": sequence, "operation": "state",
+                           "state_read": self._state_reads})
+                return answer
             if operation == "observe":
                 assert self._observe_stage is not None
                 self._stages += 1
@@ -361,6 +389,8 @@ class InfoNavigation:
             return {"sequence": sequence, "button": arguments["button"],
                     "duration": arguments["duration"], "purpose": purpose,
                     "receipt": bool(receipt), "taps_remaining": self._budget() - self._taps}
+        except NavigationRefused:
+            raise            # refused before anything was sent; the session stays usable
         except BaseException:
             self._failed = True
             raise

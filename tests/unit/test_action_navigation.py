@@ -35,9 +35,15 @@ def setup(owned, tmp_path, declaration=DECL):
         dumps.append(n)
         return {'file': f'ram-{n:02d}.bin'}
 
+    reads = []
+
+    async def read_state(n):
+        reads.append(n)
+        return {'turn': 7, 'cursor': {'x': 3, 'y': 4}}
+
     service = InfoNavigation(session, adapter, (19, 5), tmp_path / 'evidence', observe,
                              declaration=declaration, observe_stage=stage, dump_ram=dump,
-                             occupied_tiles=[(19, 5), (18, 4)])
+                             occupied_tiles=[(19, 5), (18, 4)], read_state=read_state)
     root = session.memstick_root / 'PSP/SCREENSHOT'
     root.mkdir(exist_ok=True)
     counter = [0]
@@ -351,3 +357,64 @@ def test_end_turn_needs_label_menu_and_happens_once(owned, tmp_path):
 def test_system_declarations_are_exact(owned, tmp_path, bad):
     with pytest.raises(ValueError):
         setup(owned, tmp_path, bad)
+
+
+def test_state_read_needs_no_screenshot_and_sends_no_input(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path)
+
+    async def scenario():
+        first = await service.execute('state', {'sequence': 1})
+        assert first['turn'] == 7 and first['sequence'] == 1 and first['state_read'] == 1
+        # shares the sequence counter with every other operation
+        with pytest.raises(ValueError):
+            await service.execute('state', {'sequence': 1})
+        with pytest.raises(ValueError):
+            await service.execute('state', {'sequence': 2, 'screen_file': 'x.png'})
+        await press(service, frame, 2, 'map', 'cursor', button='right')
+        await service.execute('state', {'sequence': 3})
+    asyncio.run(scenario())
+    assert len(transport.sent) > 0  # only the press sent anything
+
+
+def test_state_reads_are_bounded_and_need_a_reader(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path)
+
+    async def scenario():
+        for n in range(1, 201):
+            await service.execute('state', {'sequence': n})
+        with pytest.raises(ValueError):
+            await service.execute('state', {'sequence': 201})
+    asyncio.run(scenario())
+    from psp_buddy.info_navigation import InfoNavigation
+    bare = InfoNavigation(owned[0], service._adapter, (19, 5), tmp_path / 'e3', service._verify)
+    with pytest.raises(ValueError):
+        asyncio.run(bare.execute('state', {'sequence': 1}))
+
+
+def test_state_refusal_and_oversize_keep_the_session_usable(owned, tmp_path):
+    from psp_buddy.info_navigation import InfoNavigation
+    from psp_buddy.navigation_mailbox import NavigationRefused
+    session, _ = owned
+    service0, transport, frame, _ = setup(owned, tmp_path)
+    modes = ['transient', 'huge', 'ok']
+
+    async def reader(n):
+        mode = modes.pop(0)
+        if mode == 'transient':
+            raise NavigationRefused('map not loaded')
+        if mode == 'huge':
+            return {'blob': 'x' * 20000}
+        return {'turn': 7}
+
+    service = InfoNavigation(session, service0._adapter, (19, 5), tmp_path / 'e4', service0._verify,
+                             read_state=reader)
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):
+            await service.execute('state', {'sequence': 1})
+        with pytest.raises(NavigationRefused):          # over the mailbox limit
+            await service.execute('state', {'sequence': 1})
+        result = await service.execute('state', {'sequence': 1})   # sequence was not consumed
+        assert result['turn'] == 7 and result['sequence'] == 1 and result['state_read'] == 1
+    asyncio.run(scenario())
+    assert (tmp_path / 'e4' / 'agent-navigation-inputs.jsonl').exists()   # the good read is logged
