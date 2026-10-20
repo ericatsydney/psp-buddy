@@ -7,8 +7,11 @@ P flag).
 Will requirements are not checked (the pilot's will is not decoded yet).
 """
 
+import struct
 from collections.abc import Mapping, Sequence
 
+HOVER_HIT_ADDRESS = 0x08ED055C   # two s32; 18 Oct runs matched the on-screen HIT%
+NO_TARGET = -10000
 ENEMY_GROUP = 12          # raw_menu_group_byte: 0 = ally, 4 = third force (HIT 0%), 12 = foe
 
 
@@ -64,3 +67,21 @@ def targets_in_range(unit: Mapping[str, object], units: Sequence[Mapping[str, ob
                        "min_range": low, "max_range": high, "usable": reason is None,
                        "unusable_reason": reason, "targets": targets})
     return {"object": unit["object"], "tile": [x, y], "moved": moved, "weapons": result}
+
+
+def decode_hover_hit(blob: bytes) -> dict[str, object]:
+    """Hit chance under the cursor in target select, from the two s32 at HOVER_HIT_ADDRESS.
+
+    The fields read -10000 when the cursor is on a non-target and 24 while idle in menus, so
+    the value is only a forecast while a weapon's target select is open (the caller knows).
+    """
+    if len(blob) != 8:
+        raise ValueError("hover hit needs 8 bytes")
+    first, second = struct.unpack("<ii", blob)
+    if first != second:
+        return {"state": "unknown", "hit": None}
+    if first == NO_TARGET:
+        return {"state": "no_target", "hit": None}
+    if 0 <= first <= 100:
+        return {"state": "hit", "hit": first}
+    return {"state": "unknown", "hit": None}

@@ -117,3 +117,25 @@ def test_targets_operation_reads_memory_only_and_validates(owned, tmp_path):
     asyncio.run(scenario())
     assert calls == [(1, DESTINY_OBJECT, False), (2, DESTINY_OBJECT, True)]
     assert len(transport.sent) == sent
+
+
+def test_hit_operation_is_memory_only_and_validates(owned, tmp_path):
+    from psp_buddy.info_navigation import InfoNavigation
+    assert 'hit' in OPERATIONS
+
+    async def reader(n):
+        return {'state': 'hit', 'hit': 42}
+
+    base, transport, _, _ = setup(owned, tmp_path)
+    service = InfoNavigation(owned[0], base._adapter, (19, 5), tmp_path / 'w', base._verify,
+                             read_hit=reader)
+
+    async def scenario():
+        result = await service.execute('hit', {'sequence': 1})
+        assert result['hit'] == 42 and result['hit_read'] == 1
+        for bad in ({'sequence': 2, 'object': DESTINY_OBJECT}, {}, {'sequence': 2, 'x': 1}):
+            with pytest.raises(ValueError):
+                await service.execute('hit', bad)
+    sent = len(transport.sent)
+    asyncio.run(scenario())
+    assert len(transport.sent) == sent

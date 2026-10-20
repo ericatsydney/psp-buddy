@@ -25,13 +25,17 @@ function validate(operation, args) {
         args.object < 0x08800000 || args.object >= 0x0A000000 || (Object.hasOwn(args,'moved') && typeof args.moved !== 'boolean')) throw new Error('Invalid targets request');
     return;
   }
+  if (operation === 'hit') {
+    if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid hit request');
+    return;
+  }
   if (operation === 'state') {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
     return;
   }
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : operation === 'goto' ? [...common,'target'] : operation === 'probe_move' ? [...common,'tile'] : common;
-  if (!['press','verify','observe','dump','state','targets','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
+  if (!['press','verify','observe','dump','state','targets','hit','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
       !common.every(k=>Object.hasOwn(args,k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
       typeof args.screen_file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) ||
       !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') || !CONTEXTS.includes(args.context)) throw new Error('Invalid navigation evidence');
@@ -163,13 +167,14 @@ export function createNavigationServer(client) {
     {name:'ppsspp_read_state',description:'Read units, map terrain/cost, cursor tile and turn from memory; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_read_weapons',description:'Read the weapons of one unit (power, range, ammo, EN, flags) and pilot skills from memory by its unit object; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF}},required:['sequence','object'],additionalProperties:false}},
     {name:'ppsspp_read_targets',description:'For each weapon of one unit, list the enemy units in range from its current tile (memory only, Manhattan distance). Set moved when the unit has already moved this turn.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},moved:{type:'boolean'}},required:['sequence','object'],additionalProperties:false}},
+    {name:'ppsspp_read_hit',description:'Read the hit chance under the cursor from memory; meaningful only while a weapon target select is open (-10000 = not a target). Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

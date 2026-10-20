@@ -47,7 +47,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] M1 Cursor tile from memory (u16 pair at 0x096007C4); screen context has no single field, so it is derived from several signals plus a screenshot at screen changes.
 - [x] M2 `read_state` (units, terrain, move costs, cursor, turn) in about 9 KB, verified live.
 - [x] M3 `goto_tile` (10/10 random tiles, memory-verified) and `probe_move_range` (reachable tiles match the on-screen overlay, 526/526 tiles for Destiny).
-- [ ] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live) and `ppsspp_read_targets` (enemies in range per weapon, Manhattan distance; verified live on 20 Oct: Destiny CIWS has no target, the 3~8 gun lists (16,8) and (18,8), matching the 18 Oct previews). Still to do: hover hit chance.
+- [x] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live) and `ppsspp_read_targets` (enemies in range per weapon, Manhattan distance; verified live on 20 Oct: Destiny CIWS has no target, the 3~8 gun lists (16,8) and (18,8), matching the 18 Oct previews). `ppsspp_read_hit` (hover hit chance from the two s32 at 0x08ED055C, only meaningful in target select; verified live 20 Oct: 42% and 61% matched the screen, -10000 on a non-target). Damage forecasts are not decoded.
 - [ ] M5 `act` macro and instruction following (select, move, weapon, target, Start, dismiss) with memory verification; at least three actions across two units.
 - [ ] M6 Independent review, documentation and handover notes.
 
@@ -57,7 +57,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] Build `ppsspp_read_weapons` (memory-only) and verify it live against the Destiny and Z Gundam weapon screens.
 - [x] Find the source of Destiny's +1 range (equipped part Hi・SpecRadar; parts table decoded).
 
-Next step: read the hover hit chance (fields 0x08ED055C/60) for a chosen weapon and target.
+Next step: M5 `act` macro (select, move, weapon, target, Start, dismiss) with memory verification.
 
 Live check of `ppsspp_read_targets` (run tgt1-run-20261020T1717, backup backups/tgt1-original-20261020T071707Z-*, 44 files SHA-256 verified; memory reads only, no input): Destiny matches the 18 Oct previews; Z Gundam with moved=true greys Grenade and Hyp.MegaLauncher (no P flag). PPSSPP closed gracefully; originals unchanged (44/44).
 
@@ -234,3 +234,5 @@ dumps (wrec/zrec), with no emulator run. Details: [weapon memory note](research/
   Destiny and Z match their screens exactly, and all 26 units read. Destiny's +1 range comes from its Hi・SpecRadar part
   (parts table decoded, ids 1-based at runtime +0x38). Nothing is committed.
 - Next: targets in range (from read_state positions + weapon ranges), then the hover hit chance, then M5 `act`.
+
+Hover hit live check (run hit1-run-20261020, backup backups/tgt1-original-20261020T080138Z-*, 44/44 SHA-256; view-only, nothing confirmed): memory matched the screen for Mercurius (42) and Vayeate (61); originals unchanged after graceful close.

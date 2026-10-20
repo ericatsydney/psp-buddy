@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
-OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "targets", "goto",
+OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "targets", "hit", "goto",
               "probe_move")
 
 

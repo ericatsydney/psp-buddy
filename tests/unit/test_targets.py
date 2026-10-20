@@ -91,3 +91,19 @@ def test_ammo_and_en_availability():
 def test_unit_must_be_found_once():
     with pytest.raises(ValueError):
         targets_in_range({"object": 5, "tile_x": 1, "tile_y": 1, "en": 1}, UNITS, WEAPONS)
+
+
+def test_hover_hit_decoding():
+    import struct
+
+    from psp_buddy.targets import decode_hover_hit
+    assert decode_hover_hit(struct.pack("<ii", 42, 42)) == {"state": "hit", "hit": 42}
+    assert decode_hover_hit(struct.pack("<ii", 0, 0)) == {"state": "hit", "hit": 0}
+    assert decode_hover_hit(struct.pack("<ii", -10000, -10000)) == {"state": "no_target",
+                                                                    "hit": None}
+    # idle in menus the fields read 24 (or anything unpaired): not a forecast
+    assert decode_hover_hit(struct.pack("<ii", 24, 24))["state"] == "hit"
+    assert decode_hover_hit(struct.pack("<ii", 42, 61))["state"] == "unknown"
+    assert decode_hover_hit(struct.pack("<ii", 500, 500))["state"] == "unknown"
+    with pytest.raises(ValueError):
+        decode_hover_hit(b"\0" * 4)

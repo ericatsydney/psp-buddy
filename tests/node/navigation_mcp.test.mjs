@@ -7,7 +7,7 @@ const args = {sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),co
 test('SDK exposes only bounded navigation tools and rejects unsafe arguments', async () => {
  const calls=[]; const server=createNavigationServer({execute:async (...values)=>{calls.push(values);return {content:[{type:'text',text:'{}'}]};}});
  const [a,b]=InMemoryTransport.createLinkedPair(); await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b);
- try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_verify_info']);
+ try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_read_hit','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_verify_info']);
  await client.callTool({name:'ppsspp_press_button',arguments:args});assert.equal(calls.length,1);
  for (const changed of [{button:'start'},{duration:0},{extra:1},{screen_file:'../x.png'},{button:'circle',purpose:'cursor'},{button:'start',purpose:'cursor'},{button:'circle',purpose:'confirm_attack'}]) await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,...changed}}));
  await client.callTool({name:'ppsspp_read_state',arguments:{sequence:3}});assert.equal(calls.length,2);
@@ -17,6 +17,9 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  calls.splice(2,1);
  await client.callTool({name:'ppsspp_read_targets',arguments:{sequence:4,object:149303288,moved:true}});assert.equal(calls.length,3);assert.equal(calls[2][0],'targets');
  for (const bad of [{sequence:4},{sequence:4,object:5},{sequence:4,object:149303288,moved:'yes'},{sequence:4,object:149303288,screen_file:'x.png'}]) await assert.rejects(client.callTool({name:'ppsspp_read_targets',arguments:bad}));
+ calls.splice(2,1);
+ await client.callTool({name:'ppsspp_read_hit',arguments:{sequence:5}});assert.equal(calls[2][0],'hit');
+ for (const bad of [{},{sequence:0},{sequence:5,object:1}]) await assert.rejects(client.callTool({name:'ppsspp_read_hit',arguments:bad}));
  calls.splice(2,1);
  await client.callTool({name:'ppsspp_goto_tile',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',target:[3,4]}});assert.equal(calls.length,3);
  for (const bad of [{target:[1]},{target:[1,'2']},{context:'info',target:[1,2]},{target:[1,2],extra:1}]) await assert.rejects(client.callTool({name:'ppsspp_goto_tile',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',...bad}}));
