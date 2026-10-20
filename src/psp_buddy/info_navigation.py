@@ -10,9 +10,11 @@ import stat
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
+from . import act as act_macro
 from . import battle_state
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
@@ -29,6 +31,11 @@ MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
 MAX_PROBES = 60
+MAX_ACTS = 8
+MAX_ACT_PRESSES = 150               # presses sent by `act` per trial (taps and cursor walks)
+ACT_PRESS_RESERVE = 60              # a run starts only with at least this many presses left
+ACT_SECONDS = 95                    # cooperative budget; the helper cancels hard at 120 s, which
+                                    # would leave the emulator paused, so the macro never gets there
 MAX_GOTO_STEPS = 80
 MAX_GOTO_JUMP = 40
 GOTO_LONG_HOLD = 14                 # frames; a long hold repeats the cursor move unpredictably
@@ -98,6 +105,8 @@ class InfoNavigation:
         read_targets: Callable[[int, int, bool], Awaitable[Mapping[str, object]]] | None = None,
         read_hit: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
+        read_menu_row: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
+        act_time_scale: float = 1.0,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
         settle_seconds: float = 0.8,
@@ -122,6 +131,12 @@ class InfoNavigation:
         self._read_hit = read_hit
         self._hit_reads = 0
         self._read_cursor = read_cursor
+        self._read_menu_row = read_menu_row
+        self._act_scale = act_time_scale
+        self._acts = 0
+        self._act_presses = 0
+        self._act_deadline = 0.0
+        self._act_pending: dict[str, object] | None = None
         self._map_size = map_size
         self._poll = poll_seconds
         self._goto_presses = 0
@@ -158,7 +173,8 @@ class InfoNavigation:
             return None
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
-                           ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"])
+                           ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"],
+                           ["act"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -216,7 +232,8 @@ class InfoNavigation:
         if purpose in SYSTEM_PURPOSES:
             self._check_system(purpose, arguments, actions)
             return
-        if "system_recon" in actions or "end_turn" in actions or "probe" in actions:
+        if ("system_recon" in actions or "end_turn" in actions or "probe" in actions
+                or "act" in actions):
             raise ValueError("this trial permits only its declared special steps")
         if purpose == "dismiss_result":
             # Decision-free "Get Result" box; only exists after a declared attack.
@@ -287,7 +304,7 @@ class InfoNavigation:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
         if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "targets",
-                             "hit", "goto", "probe_move"):
+                             "hit", "goto", "probe_move", "act"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -328,6 +345,8 @@ class InfoNavigation:
             return self._frame(arguments), None
         if operation == "goto":
             return self._check_goto(arguments, keys), None
+        if operation == "act":
+            return self._check_act(arguments, keys), None
         if operation == "probe_move":
             return self._check_probe(arguments, keys), None
         if operation == "dump":
@@ -413,11 +432,135 @@ class InfoNavigation:
     @staticmethod
     def _centered(tile: list[int], reachable: list[list[int]]) -> bool:
         """A fresh range is centred on the unit; stale costs from another unit fail this test."""
-        cost = {(x, y): c for x, y, c in reachable}
-        near = [pos for pos, c in cost.items() if c == 1]
-        return (bool(cost) and (tile[0], tile[1]) not in cost and bool(near)
-                and all(abs(x - tile[0]) + abs(y - tile[1]) == 1 for x, y in near)
-                and all(c >= abs(x - tile[0]) + abs(y - tile[1]) for (x, y), c in cost.items()))
+        return act_macro.centered(tile, reachable)
+
+    def _check_act(self, arguments: Mapping[str, object], keys: set[str]) -> str:
+        decl = self._declaration
+        optional = {"move_to", "attack", "commit", "phase"}
+        required = BASE_KEYS | {"unit_object"}
+        if (decl is None or decl["actions"] != ["act"] or not required <= keys
+                or not keys <= required | optional
+                or self._read_state is None or self._read_weapons is None
+                or self._read_hit is None or self._read_cursor is None
+                or self._read_menu_row is None or self._map_size is None):
+            raise ValueError("act needs the act declaration, all memory readers and a request")
+        phase = arguments.get("phase", "run")
+        if phase not in ("run", "fire"):
+            raise ValueError("act phase must be run or fire")
+        if arguments["context"] != ("attack_forecast" if phase == "fire" else "map"):
+            raise ValueError("act needs a map screenshot (an attack-forecast one for fire)")
+        unit_object = arguments["unit_object"]
+        if type(unit_object) is not int or not RAM_START <= unit_object < RAM_END:
+            raise ValueError("act needs a unit object")
+        move_to = arguments.get("move_to")
+        if move_to is not None and not self._tile(move_to):
+            raise ValueError("move_to must be [x, y]")
+        attack = arguments.get("attack")
+        if attack is not None:
+            weapon = attack.get("weapon") if isinstance(attack, dict) else None
+            victim = attack.get("target_object") if isinstance(attack, dict) else None
+            if (not isinstance(attack, dict) or set(attack) != {"weapon", "target_object"}
+                    or not isinstance(weapon, str) or not 0 < len(weapon) <= 64
+                    or type(victim) is not int or not RAM_START <= victim < RAM_END):
+                raise ValueError("attack needs a weapon name and a target object")
+        if move_to is None and attack is None:
+            raise ValueError("act needs a move_to or an attack")
+        if type(arguments.get("commit", False)) is not bool:
+            raise ValueError("commit must be a boolean")
+        if phase == "fire":
+            if attack is None or self._act_pending != self._act_key(arguments):
+                raise ValueError("no matching forecast is waiting to be fired")
+        elif self._act_pending is not None:
+            raise ValueError("a forecast is waiting: fire it or cancel it first")
+        if self._acts >= MAX_ACTS or self._act_presses + ACT_PRESS_RESERVE > MAX_ACT_PRESSES:
+            raise ValueError("act budget for this trial is exhausted")
+        name = self._frame(arguments)
+        if name in self._stale or self._uses.get(name, 0) >= 1:
+            raise ValueError("act needs a fresh screenshot")
+        return name
+
+    @staticmethod
+    def _act_key(arguments: Mapping[str, object]) -> dict[str, object]:
+        return {"unit_object": arguments["unit_object"], "move_to": arguments.get("move_to"),
+                "attack": arguments.get("attack")}
+
+    def _act_io(self) -> act_macro.ActIO:
+        nav = self
+
+        class Io:
+            async def press(self, button: str, frames: int = 2) -> None:
+                if nav._act_presses >= MAX_ACT_PRESSES:
+                    raise act_macro.ActIOError("act press budget exhausted")
+                nav._act_presses += 1
+                nav._log({"operation": "act_press", "button": button,
+                          "monotonic_ns": time.monotonic_ns()})
+                await nav._adapter.press(button, frames)
+
+            async def goto(self, tile: list[int]) -> Mapping[str, object]:
+                assert nav._read_cursor is not None
+                try:
+                    return await nav._goto(tile)
+                except NavigationRefused as exc:
+                    return {"reached": False, "reason": str(exc)}
+
+            async def state(self) -> Mapping[str, object]:
+                assert nav._read_state is not None
+                nav._state_reads += 1
+                result: Mapping[str, object] = await nav._act_read(
+                    nav._read_state(nav._state_reads))
+                return result
+
+            async def read_weapons(self, unit_object: int) -> Mapping[str, object]:
+                assert nav._read_weapons is not None
+                nav._weapon_reads += 1
+                result: Mapping[str, object] = await nav._act_read(
+                    nav._read_weapons(nav._weapon_reads, unit_object))
+                return result
+
+            async def hit(self) -> Mapping[str, object]:
+                assert nav._read_hit is not None
+                nav._hit_reads += 1
+                result: Mapping[str, object] = await nav._act_read(nav._read_hit(nav._hit_reads))
+                return result
+
+            async def menu_row(self) -> tuple[int, int] | None:
+                assert nav._read_menu_row is not None
+                result: tuple[int, int] | None = await nav._act_read(nav._read_menu_row())
+                return result
+
+            async def sleep(self, seconds: float) -> None:
+                await asyncio.sleep(seconds * nav._act_scale)
+
+            def time_left(self) -> float:
+                if nav._act_scale == 0:
+                    return float("inf")
+                return nav._act_deadline - time.monotonic()
+        return Io()
+
+    async def _act_read(self, call: Awaitable[Any]) -> Any:
+        started = time.monotonic()
+        outcome = "ok"
+        try:
+            return await call
+        except (NavigationRefused, ValueError) as exc:
+            outcome = f"refused: {exc}"
+            raise act_macro.ActIOError(str(exc)) from exc
+        finally:
+            self._log({"operation": "act_read", "seconds": round(time.monotonic() - started, 2),
+                       "outcome": outcome, "monotonic_ns": time.monotonic_ns()})
+
+    async def _run_act(self, arguments: Mapping[str, object]) -> dict[str, object]:
+        phase = str(arguments.get("phase", "run"))
+        key = self._act_key(arguments)
+        self._acts += 1
+        self._act_deadline = time.monotonic() + ACT_SECONDS
+        outcome = await act_macro.run_act(
+            {k: v for k, v in key.items() if v is not None}, self._act_io(),
+            commit=bool(arguments.get("commit", False)), phase=phase)
+        self._act_pending = (key if outcome.get("ok") and outcome.get("phase") == "forecast"
+                             else None)
+        self._stale = {p.name for p in self._root.iterdir()}
+        return outcome
 
     def _check_goto(self, arguments: Mapping[str, object], keys: set[str]) -> str:
         if (keys != BASE_KEYS | {"target"} or self._read_cursor is None
@@ -506,6 +649,17 @@ class InfoNavigation:
                 self._log({"sequence": sequence, "operation": "goto", "screen": name,
                            "target": arguments_target, **outcome})
                 return {**outcome, "sequence": sequence}
+            if operation == "act":
+                outcome = await self._run_act(arguments)
+                answer = {**outcome, "sequence": sequence, "acts_used": self._acts,
+                          "act_presses_used": self._act_presses}
+                if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                    answer = {**answer, "stages": [], "deltas": [], "truncated": True}
+                self._log({"sequence": sequence, "operation": "act", "screen": name,
+                           "ok": answer.get("ok"), "phase": answer.get("phase"),
+                           "stage": answer.get("stage"), "reason": answer.get("reason"),
+                           "unit_object": arguments["unit_object"]})
+                return answer
             if operation == "hit":
                 assert self._read_hit is not None
                 self._hit_reads += 1
@@ -611,6 +765,8 @@ class InfoNavigation:
                 self._menu_open = False
             elif purpose == "advance_dialog":
                 self._advances += 1
+            elif purpose == "cancel" and arguments["context"] == "attack_forecast":
+                self._act_pending = None
             elif purpose == "cancel" and arguments["context"] == "system_menu":
                 self._menu_open = False
             elif purpose == "choose_target":

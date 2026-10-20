@@ -48,7 +48,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] M2 `read_state` (units, terrain, move costs, cursor, turn) in about 9 KB, verified live.
 - [x] M3 `goto_tile` (10/10 random tiles, memory-verified) and `probe_move_range` (reachable tiles match the on-screen overlay, 526/526 tiles for Destiny).
 - [x] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live) and `ppsspp_read_targets` (enemies in range per weapon, Manhattan distance; verified live on 20 Oct: Destiny CIWS has no target, the 3~8 gun lists (16,8) and (18,8), matching the 18 Oct previews). `ppsspp_read_hit` (hover hit chance from the two s32 at 0x08ED055C, only meaningful in target select; verified live 20 Oct: 42% and 61% matched the screen, -10000 on a non-target). Damage forecasts are not decoded.
-- [ ] M5 `act` macro and instruction following (select, move, weapon, target, Start, dismiss) with memory verification; at least three actions across two units.
+- [x] M5 `act` macro (`ppsspp_act`; select, Move, weapon row, target, forecast, Start, dismiss; every stage memory-verified). Live 20 Oct: Destiny move + FlashEdge2 and Z Gundam move + Beam Rifle, both executed. See the 20 Oct M5 note below.
 - [ ] M6 Independent review, documentation and handover notes.
 
 ## 3. Today/session goal — 20 October
@@ -236,3 +236,18 @@ dumps (wrec/zrec), with no emulator run. Details: [weapon memory note](research/
 - Next: targets in range (from read_state positions + weapon ranges), then the hover hit chance, then M5 `act`.
 
 Hover hit live check (run hit1-run-20261020, backup backups/tgt1-original-20261020T080138Z-*, 44/44 SHA-256; view-only, nothing confirmed): memory matched the screen for Mercurius (42) and Vayeate (61); originals unchanged after graceful close.
+
+## M5 `act` macro (20 Oct)
+
+Design/plan: [spec](superpowers/specs/2026-10-20-act-macro-design.md), [plan](superpowers/plans/2026-10-20-act-macro.md). New `src/psp_buddy/act.py`,
+`InfoNavigation` operation `act` (declaration `{"unit":"any","actions":["act"]}`), tool `ppsspp_act`. Two phases: `commit:false` runs
+plan, select, Move, Attack menu, weapon row, target, forecast and stops; `phase:"fire"` (forecast screenshot) presses Start and dismisses the result.
+Checks: cursor walk, centred reachable range, unit tile/EN after Move, weapon-menu row/count (u8 0x08E397A8/+2, verified live),
+hover hit chance, EN/ammo spent, action counter cleared. Tests: 1298 + 8 node + 16 helper, Ruff, strict mypy.
+Live (run act5-run-20261020T2236, backup act5-original-20261020T123606Z-*, 44/44 unchanged after graceful close): Destiny (19,5)->(19,6),
+FlashEdge2 on Mercurius (60% forecast matched the screen), EN 229->224, counter cleared; Z Gundam (18,13)->(14,15), Beam Rifle (90%), ammo 9->8, HP 4700->1730, one result press.
+Lessons: state reads take 14-19 s (collector), so a run takes about 70 s and a fire about 90-100 s; a hard cancel mid-read (helper deadline) left the
+emulator "paused" and wedged the helper in runs act1-act4 (cost four relaunches), so the macro now stops cooperatively (95 s budget) and `commit:true`
+falls back to stopping at the forecast. No reads during the first 8 s after Start. Known gaps: duplicate weapon names pick the first; attack-only
+(second menu entry) and Z page-2 weapons untested live; a missing PSP/SCREENSHOT folder must be created before the first screenshot; reads are slow
+(a lighter state read would help). Not committed.

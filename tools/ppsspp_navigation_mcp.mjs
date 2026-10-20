@@ -33,6 +33,24 @@ function validate(operation, args) {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
     return;
   }
+  if (operation === 'act') {
+    const keys = Object.keys(args);
+    const base = ['sequence','screen_file','screen_sha256','context','unit_object'];
+    const objectOk = (n) => Number.isSafeInteger(n) && n >= 0x08800000 && n < 0x0A000000;
+    const a = args.attack;
+    if (keys.some(k => ![...base,'move_to','attack','commit','phase'].includes(k)) || !base.every(k => Object.hasOwn(args,k)) ||
+        !Number.isSafeInteger(args.sequence) || args.sequence < 1 || typeof args.screen_file !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) || !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') ||
+        !['map','attack_forecast'].includes(args.context) || !objectOk(args.unit_object) ||
+        (Object.hasOwn(args,'phase') && !['run','fire'].includes(args.phase)) ||
+        (args.context === 'attack_forecast') !== (args.phase === 'fire') ||
+        (Object.hasOwn(args,'commit') && typeof args.commit !== 'boolean') ||
+        (Object.hasOwn(args,'move_to') && (!Array.isArray(args.move_to) || args.move_to.length !== 2 || !args.move_to.every(Number.isSafeInteger))) ||
+        (Object.hasOwn(args,'attack') && (!a || typeof a !== 'object' || Object.keys(a).sort().join() !== 'target_object,weapon' || typeof a.weapon !== 'string' ||
+          a.weapon.length < 1 || a.weapon.length > 64 || !objectOk(a.target_object))) ||
+        (!Object.hasOwn(args,'move_to') && !Object.hasOwn(args,'attack'))) throw new Error('Invalid act request');
+    return;
+  }
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : operation === 'goto' ? [...common,'target'] : operation === 'probe_move' ? [...common,'tile'] : common;
   if (!['press','verify','observe','dump','state','targets','hit','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
@@ -104,9 +122,9 @@ async function readSafe(path) {
   } finally { await handle.close(); }
 }
 
-export async function createNavigationClient(mailbox, trialId, { timeoutMs = 65000 } = {}) {
+export async function createNavigationClient(mailbox, trialId, { timeoutMs = 125000 } = {}) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(trialId)) throw new Error('Invalid trial ID');
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 65000) throw new Error('Invalid timeout');
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 125000) throw new Error('Invalid timeout');
   const root = resolve(mailbox);
   await safeDirectory(root);
   let busy = false;
@@ -132,7 +150,7 @@ export async function createNavigationClient(mailbox, trialId, { timeoutMs = 650
         } finally { await handle.close(); }
         try { await link(temporary, pending); published = true; }
         finally { await unlink(temporary); }
-        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move') ? 125000 : 65000);
+        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move' || operation === 'act') ? 125000 : 65000);
         while (Date.now() < deadline) {
           await safeDirectory(root);
           let value;
@@ -170,11 +188,12 @@ export function createNavigationServer(client) {
     {name:'ppsspp_read_hit',description:'Read the hit chance under the cursor from memory; meaningful only while a weapon target select is open (-10000 = not a target). Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
+    {name:'ppsspp_act',description:'Follow one tactical instruction for one ally unit with memory checks at every stage: select, optional Move to a tile, optional Attack with a named weapon on a target object. commit=false stops at the attack forecast; phase=fire (with an attack_forecast screenshot) presses Start and dismisses the result. Needs the act declaration.',inputSchema:{type:'object',properties:{...common,unit_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},move_to:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},attack:{type:'object',properties:{weapon:{type:'string',minLength:1,maxLength:64},target_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF}},required:['weapon','target_object'],additionalProperties:false},commit:{type:'boolean'},phase:{enum:['run','fire']}},required:[...Object.keys(common),'unit_object'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

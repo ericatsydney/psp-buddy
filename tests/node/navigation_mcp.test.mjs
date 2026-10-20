@@ -7,7 +7,7 @@ const args = {sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),co
 test('SDK exposes only bounded navigation tools and rejects unsafe arguments', async () => {
  const calls=[]; const server=createNavigationServer({execute:async (...values)=>{calls.push(values);return {content:[{type:'text',text:'{}'}]};}});
  const [a,b]=InMemoryTransport.createLinkedPair(); await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b);
- try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_read_hit','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_verify_info']);
+ try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_read_hit','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_act','ppsspp_verify_info']);
  await client.callTool({name:'ppsspp_press_button',arguments:args});assert.equal(calls.length,1);
  for (const changed of [{button:'start'},{duration:0},{extra:1},{screen_file:'../x.png'},{button:'circle',purpose:'cursor'},{button:'start',purpose:'cursor'},{button:'circle',purpose:'confirm_attack'}]) await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,...changed}}));
  await client.callTool({name:'ppsspp_read_state',arguments:{sequence:3}});assert.equal(calls.length,2);
@@ -25,5 +25,11 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  for (const bad of [{target:[1]},{target:[1,'2']},{context:'info',target:[1,2]},{target:[1,2],extra:1}]) await assert.rejects(client.callTool({name:'ppsspp_goto_tile',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',...bad}}));
  await client.callTool({name:'ppsspp_probe_move_range',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',tile:[3,4]}});assert.equal(calls.length,4);
  for (const bad of [{tile:[1]},{tile:[1,'2']},{context:'info',tile:[1,2]},{tile:[1,2],target:[1,2]}]) await assert.rejects(client.callTool({name:'ppsspp_probe_move_range',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',...bad}}));
+ calls.splice(3,1);
+ const act={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288,move_to:[3,4],attack:{weapon:'BeamRifle',target_object:149303912},commit:false};
+ await client.callTool({name:'ppsspp_act',arguments:act});assert.equal(calls.at(-1)[0],'act');
+ await client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'attack_forecast',unit_object:149303288,attack:act.attack,phase:'fire'}});
+ for (const bad of [{unit_object:5},{unit_object:'1'},{move_to:[1]},{move_to:[1,'2']},{attack:{weapon:'x'}},{attack:{weapon:'x',target_object:1,extra:1}},{attack:{weapon:'',target_object:149303912}},{commit:'yes'},{phase:'other'},{context:'info'},{button:'circle'}]) await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{...act,...bad}}));
+ await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288}}));
  } finally {await client.close();await server.close();}
 });
