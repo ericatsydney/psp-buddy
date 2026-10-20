@@ -1,6 +1,6 @@
 # Project progress
 
-Updated 19 October 2026 (Australia/Brisbane).
+Updated 20 October 2026 (Australia/Brisbane).
 Ticks mean ready in the scope stated; unchecked items may have partial implementation.
 
 ## 1. Long-term goal
@@ -10,7 +10,7 @@ with protected progress, up to three checkpoint retries, and handover when neede
 
 - [x] Verified save/state backup service.
 - [ ] Start from an in-game save or save state automatically.
-- [ ] Read the complete current battle state automatically.
+- [ ] Read the complete current battle state automatically. (Partial, from memory and verified live: units, map, cursor, turn and every unit's weapons. Not yet: targets in range, hit/damage forecasts.)
 - [ ] Follow tactical instructions and choose legal actions in a live battle.
 - [ ] Move and attack automatically. (Prototype: agent executes a declared, screenshot-grounded Move/Attack/Standby; it does not yet choose targets or plan.)
 - [ ] Handle enemy reactions and recognized decision-free dialogue automatically.
@@ -51,7 +51,15 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [ ] M5 `act` macro and instruction following (select, move, weapon, target, Start, dismiss) with memory verification; at least three actions across two units.
 - [ ] M6 Independent review, documentation and handover notes.
 
-## 3. Today/session goal — 18 October
+## 3. Today/session goal — 20 October
+
+- [x] Decode where weapon data lives in memory (weapon records, unit weapon lists, ammo, pilot skills).
+- [x] Build `ppsspp_read_weapons` (memory-only) and verify it live against the Destiny and Z Gundam weapon screens.
+- [x] Find the source of Destiny's +1 range (equipped part Hi・SpecRadar; parts table decoded).
+
+Next step: build M4 targets-in-range from `read_state` unit positions plus `ppsspp_read_weapons` ranges, then read the hover hit chance.
+
+## Session goal history — 18 October
 
 - [x] Check the handover and actual emulator/helper state.
 - [x] Implement on-demand MCP capture and verify its offline components.
