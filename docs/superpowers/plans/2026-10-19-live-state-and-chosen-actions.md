@@ -85,3 +85,23 @@ assume). Each live trial: close PPSSPP, back up SYSTEM plus launcher snapshots, 
   data). Z Gundam matched tile for tile earlier. Acceptance 2 (10 random tiles) was met on 19 Oct.
 - Only OS-level SendKeys game buttons proved unreliable again (a second X was dropped); everything above used the guarded bridge.
 - Remaining plan: M4 weapon/target probing and hover hit chance, M5 `act` macro and instruction following, M6 review/docs.
+
+## M4 plan — `probe_weapons` from memory (20 Oct)
+
+Layout: [weapon memory note](../../research/2026-10-20-weapon-memory.md). The user chose a memory-only probe, with no screen reading.
+
+- `src/psp_buddy/weapons.py`: pure decoders. The record, name, runtime and pilot skills are decoded from bytes, and
+  `read_unit_weapons(read, actor)` follows actor -> roster entry -> weapon list through an injected async reader. Pointers must
+  lie in user RAM and be aligned, a record's slot field must equal its list slot, ranges must be sane, and the name must be
+  valid cp932. Output gives base and effective power (base + 100 x upgrade-level candidate), base range with
+  `range_bonus_resolved: false`, ammo (raw // 9), EN, hit, crit, will, terrain, P/B/S flags and pilot skill pairs.
+- Bridge: a new `weapons` operation that takes `{sequence, object}` with no screenshot and sends no input. It allows at most 200
+  per trial; a refusal consumes neither the sequence nor the budget. It is wired through `InfoNavigation`, `NavigationMailbox`,
+  `tools/ppsspp_navigation_mcp.mjs` (`ppsspp_read_weapons`) and the private handoff `_read_weapons`, which finds the actor from
+  the coherent observer and reads within one observation pause.
+- Tests: decoder unit tests (Destiny and Z records taken from the live dumps, gaps, bad pointers, slot mismatch, bad names),
+  navigation tests (no input, budget, refusal keeps the session usable), and a Node tool-list/validation test.
+- Verification: `pytest`, `ruff`, strict `mypy`, `node --test`, then a protected live call for Destiny and Z, compared with the
+  20 Oct screens.
+- Acceptance: the live probe output matches the screens. Power matches for both units. Range is base, flagged unresolved,
+  until the range-bonus investigation that follows.

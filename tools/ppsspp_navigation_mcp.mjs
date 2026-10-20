@@ -13,6 +13,11 @@ const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel
 const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result','open_system_menu','end_turn','advance_dialog'];
 function validate(operation, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid arguments');
+  if (operation === 'weapons') {
+    if (Object.keys(args).length !== 2 || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
+        !Number.isSafeInteger(args.object) || args.object < 0x08800000 || args.object >= 0x0A000000) throw new Error('Invalid weapons request');
+    return;
+  }
   if (operation === 'state') {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
     return;
@@ -149,13 +154,14 @@ export function createNavigationServer(client) {
     {name:'ppsspp_observe',description:'Save one raw coherent memory sample for the current stage; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_dump_ram',description:'Save one read-only dump of PSP user RAM for offline comparison; sends no input.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
     {name:'ppsspp_read_state',description:'Read units, map terrain/cost, cursor tile and turn from memory; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
+    {name:'ppsspp_read_weapons',description:'Read the weapons of one unit (power, range, ammo, EN, flags) and pilot skills from memory by its unit object; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF}},required:['sequence','object'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

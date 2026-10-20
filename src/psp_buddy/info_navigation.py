@@ -18,11 +18,13 @@ from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
 from .navigation_mailbox import NavigationRefused
+from .weapons import RAM_END, RAM_START
 
 MAX_TAPS = 16
 MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
 MAX_STATE_READS = 200
+MAX_WEAPON_READS = 200
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
 MAX_PROBES = 60
 MAX_GOTO_STEPS = 80
@@ -90,6 +92,7 @@ class InfoNavigation:
         dump_ram: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         occupied_tiles: Iterable[tuple[int, int]] | None = None,
         read_state: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
+        read_weapons: Callable[[int, int], Awaitable[Mapping[str, object]]] | None = None,
         read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
@@ -108,6 +111,8 @@ class InfoNavigation:
         self._observe_stage = observe_stage
         self._dump_ram = dump_ram
         self._read_state = read_state
+        self._read_weapons = read_weapons
+        self._weapon_reads = 0
         self._read_cursor = read_cursor
         self._map_size = map_size
         self._poll = poll_seconds
@@ -273,7 +278,8 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe", "dump", "state", "goto", "probe_move"):
+        if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "goto",
+                             "probe_move"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -283,6 +289,14 @@ class InfoNavigation:
             if keys != {"sequence"} or self._read_state is None or (
                     self._state_reads >= MAX_STATE_READS):
                 raise ValueError("state read needs only a sequence, a reader and budget")
+            return "", None
+        if operation == "weapons":
+            # Pure memory read of one unit's weapons: no screenshot reference, no input.
+            unit_object = arguments.get("object")
+            if (keys != {"sequence", "object"} or type(unit_object) is not int
+                    or not RAM_START <= unit_object < RAM_END or self._read_weapons is None
+                    or self._weapon_reads >= MAX_WEAPON_READS):
+                raise ValueError("weapon read needs a sequence, a unit object, a reader and budget")
             return "", None
         if arguments.get("context") not in CONTEXTS:
             raise ValueError("invalid screen context")
@@ -470,6 +484,30 @@ class InfoNavigation:
                 self._log({"sequence": sequence, "operation": "goto", "screen": name,
                            "target": arguments_target, **outcome})
                 return {**outcome, "sequence": sequence}
+            if operation == "weapons":
+                assert self._read_weapons is not None
+                unit_object = arguments["object"]
+                assert isinstance(unit_object, int)
+                self._weapon_reads += 1
+                try:
+                    try:
+                        weapons = dict(await self._read_weapons(self._weapon_reads, unit_object))
+                    except NavigationRefused:
+                        raise
+                    except ValueError as exc:
+                        # Implausible pointers or records: refuse the read, keep the session.
+                        raise NavigationRefused(f"weapons not readable now: {exc}") from exc
+                    answer = {**weapons, "sequence": sequence, "weapon_read": self._weapon_reads}
+                    if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                        raise NavigationRefused("weapon list is too large for the mailbox")
+                except NavigationRefused:
+                    # Memory reads are harmless: a refusal consumes neither sequence nor budget.
+                    self._next -= 1
+                    self._weapon_reads -= 1
+                    raise
+                self._log({"sequence": sequence, "operation": "weapons",
+                           "object": arguments["object"], "weapon_read": self._weapon_reads})
+                return answer
             if operation == "state":
                 assert self._read_state is not None
                 self._state_reads += 1

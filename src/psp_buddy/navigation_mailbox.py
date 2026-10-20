@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
-OPERATIONS = ("press", "verify", "observe", "dump", "state", "goto", "probe_move")
+OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "goto", "probe_move")
 
 
 def _deadline(operation: str) -> int:

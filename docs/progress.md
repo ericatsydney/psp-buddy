@@ -39,6 +39,18 @@ failed with PPSSPP's "Could not download output". The helper stopped safely; the
 built-in screenshot route then passed in a fresh trial. Fully unattended runtime capture
 remains unverified. Review findings are resolved.
 
+## 2b. Current short-term goal — live state reading and agent-chosen actions (19 Oct)
+
+Plan: [plan](superpowers/plans/2026-10-19-live-state-and-chosen-actions.md), [design](superpowers/specs/2026-10-19-live-state-and-chosen-actions-design.md).
+Goal: from one tactical instruction the agent reads the live battle state, chooses a legal Move and Attack, executes and verifies it.
+
+- [x] M1 Cursor tile from memory (u16 pair at 0x096007C4); screen context has no single field, so it is derived from several signals plus a screenshot at screen changes.
+- [x] M2 `read_state` (units, terrain, move costs, cursor, turn) in about 9 KB, verified live.
+- [x] M3 `goto_tile` (10/10 random tiles, memory-verified) and `probe_move_range` (reachable tiles match the on-screen overlay, 526/526 tiles for Destiny).
+- [ ] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live). Still to do: targets in range and hover hit.
+- [ ] M5 `act` macro and instruction following (select, move, weapon, target, Start, dismiss) with memory verification; at least three actions across two units.
+- [ ] M6 Independent review, documentation and handover notes.
+
 ## 3. Today/session goal — 18 October
 
 - [x] Check the handover and actual emulator/helper state.
@@ -190,3 +202,25 @@ PPSSPP is left open in turn 8 (player phase) on the disposable trial copy.
 - Tooling fix: the PowerShell screenshot helper now forces PPSSPP to the foreground (Alt tap + SetForegroundWindow, verified) before Alt+D, t;
   the first attempt this session sent no input because another window had the foreground (no game input was sent).
 PPSSPP is left open on Z Gundam's command menu (turn 7 start, trial copy). Nothing was confirmed.
+
+## M4 weapon memory — decoded offline (20 Oct)
+
+The game is Super Robot Wars Z2 Saisei-hen (ULJS00460). Public CWCheat codes for it (ammo/EN "not decrease", Range Up) line up
+byte for byte with our dumps and led to the code that spends ammo and EN. From there, the full chain was decoded from retained
+dumps (wrec/zrec), with no emulator run. Details: [weapon memory note](research/2026-10-20-weapon-memory.md).
+
+- Battle actor (16 B, the existing `actor` nodes) +4 -> roster entry (mech def, runtime, weapon list). The runtime holds HP, EN and move.
+  The weapon list holds up to 21 weapon-record pointers, in menu slot order, with gaps allowed. Beside them are pointers to
+  current-ammo counters, stored x9.
+- Weapon record (44 B): name in full-width Shift-JIS, power, min/max range, hit, crit, max ammo, EN cost, will, attribute bits.
+- Verified: Z Gundam Beam Rifle reads range 2~4, ammo 9/10, which matches the 18 Oct trial. Grenade 1~5. Destiny's five
+  weapons are in screen order. The P-flag hypothesis fits Z's Vulcan, Grenade and Beam Rifle behaviour.
+- Live check passed (wpn1/wpn2 runs, view-only, fresh verified backups, originals unchanged afterwards). Every displayed field
+  matches memory for Destiny and Z: hit, crit, ammo, EN, terrain and the S/P/B flags. The only exceptions are two modifiers:
+  power, which fits upgrade level x 100 (candidate runtime +0x1D), and max range. Destiny gets +1 range, probably from the
+  game's effect engine (parts or a bonus), which is not decoded. Z has no modifiers.
+- `ppsspp_read_weapons` is built (TDD, review fixes, 1240 + 177 + 8 tests, Ruff, mypy) and verified live. For any unit
+  object it returns weapons with effective power and range, ammo, EN, hit, crit, terrain, flags, pilot skills and parts.
+  Destiny and Z match their screens exactly, and all 26 units read. Destiny's +1 range comes from its Hi・SpecRadar part
+  (parts table decoded, ids 1-based at runtime +0x38). Nothing is committed.
+- Next: targets in range (from read_state positions + weapon ranges), then the hover hit chance, then M5 `act`.
