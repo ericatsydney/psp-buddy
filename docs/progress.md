@@ -47,7 +47,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] M1 Cursor tile from memory (u16 pair at 0x096007C4); screen context has no single field, so it is derived from several signals plus a screenshot at screen changes.
 - [x] M2 `read_state` (units, terrain, move costs, cursor, turn) in about 9 KB, verified live.
 - [x] M3 `goto_tile` (10/10 random tiles, memory-verified) and `probe_move_range` (reachable tiles match the on-screen overlay, 526/526 tiles for Destiny).
-- [ ] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live). Still to do: targets in range and hover hit.
+- [ ] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live) and `ppsspp_read_targets` (enemies in range per weapon, Manhattan distance; offline-checked against the 18 Oct target previews, not yet live). Still to do: hover hit chance.
 - [ ] M5 `act` macro and instruction following (select, move, weapon, target, Start, dismiss) with memory verification; at least three actions across two units.
 - [ ] M6 Independent review, documentation and handover notes.
 
@@ -57,7 +57,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] Build `ppsspp_read_weapons` (memory-only) and verify it live against the Destiny and Z Gundam weapon screens.
 - [x] Find the source of Destiny's +1 range (equipped part Hi・SpecRadar; parts table decoded).
 
-Next step: build M4 targets-in-range from `read_state` unit positions plus `ppsspp_read_weapons` ranges, then read the hover hit chance.
+Next step: optional protected live check of `ppsspp_read_targets`, then read the hover hit chance.
 
 ## Session goal history — 18 October
 

@@ -89,3 +89,31 @@ def test_weapon_refusal_and_oversize_keep_the_session_usable(owned, tmp_path):
         result = await service.execute('weapons', {'sequence': 1, 'object': DESTINY_OBJECT})
         assert result['sequence'] == 1 and result['weapon_read'] == 1
     asyncio.run(scenario())
+
+
+def test_targets_operation_reads_memory_only_and_validates(owned, tmp_path):
+    from psp_buddy.info_navigation import InfoNavigation
+    assert 'targets' in OPERATIONS
+    calls = []
+
+    async def reader(n, unit_object, moved):
+        calls.append((n, unit_object, moved))
+        return {'weapons': []}
+
+    base, transport, _, _ = setup(owned, tmp_path)
+    service = InfoNavigation(owned[0], base._adapter, (19, 5), tmp_path / 'w', base._verify,
+                             read_targets=reader)
+
+    async def scenario():
+        result = await service.execute('targets', {'sequence': 1, 'object': DESTINY_OBJECT})
+        assert result['target_read'] == 1 and result['sequence'] == 1
+        await service.execute('targets', {'sequence': 2, 'object': DESTINY_OBJECT, 'moved': True})
+        for bad in ({'sequence': 3}, {'sequence': 3, 'object': 5},
+                    {'sequence': 3, 'object': DESTINY_OBJECT, 'moved': 1},
+                    {'sequence': 3, 'object': DESTINY_OBJECT, 'screen_file': 'x.png'}):
+            with pytest.raises(ValueError):
+                await service.execute('targets', bad)
+    sent = len(transport.sent)
+    asyncio.run(scenario())
+    assert calls == [(1, DESTINY_OBJECT, False), (2, DESTINY_OBJECT, True)]
+    assert len(transport.sent) == sent

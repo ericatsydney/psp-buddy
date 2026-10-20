@@ -25,6 +25,7 @@ MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
 MAX_STATE_READS = 200
 MAX_WEAPON_READS = 200
+MAX_TARGET_READS = 200
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
 MAX_PROBES = 60
 MAX_GOTO_STEPS = 80
@@ -93,6 +94,7 @@ class InfoNavigation:
         occupied_tiles: Iterable[tuple[int, int]] | None = None,
         read_state: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         read_weapons: Callable[[int, int], Awaitable[Mapping[str, object]]] | None = None,
+        read_targets: Callable[[int, int, bool], Awaitable[Mapping[str, object]]] | None = None,
         read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
@@ -113,6 +115,8 @@ class InfoNavigation:
         self._read_state = read_state
         self._read_weapons = read_weapons
         self._weapon_reads = 0
+        self._read_targets = read_targets
+        self._target_reads = 0
         self._read_cursor = read_cursor
         self._map_size = map_size
         self._poll = poll_seconds
@@ -278,8 +282,8 @@ class InfoNavigation:
             raise ValueError("navigation is terminal; start a fresh protected session")
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
-        if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "goto",
-                             "probe_move"):
+        if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "targets",
+                             "goto", "probe_move"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -297,6 +301,15 @@ class InfoNavigation:
                     or not RAM_START <= unit_object < RAM_END or self._read_weapons is None
                     or self._weapon_reads >= MAX_WEAPON_READS):
                 raise ValueError("weapon read needs a sequence, a unit object, a reader and budget")
+            return "", None
+        if operation == "targets":
+            # Pure memory read: enemies in range per weapon. No screenshot, no input.
+            unit_object = arguments.get("object")
+            if (not keys <= {"sequence", "object", "moved"} or not {"sequence", "object"} <= keys
+                    or type(unit_object) is not int or not RAM_START <= unit_object < RAM_END
+                    or type(arguments.get("moved", False)) is not bool
+                    or self._read_targets is None or self._target_reads >= MAX_TARGET_READS):
+                raise ValueError("target read needs a sequence, a unit object, a reader and budget")
             return "", None
         if arguments.get("context") not in CONTEXTS:
             raise ValueError("invalid screen context")
@@ -484,6 +497,25 @@ class InfoNavigation:
                 self._log({"sequence": sequence, "operation": "goto", "screen": name,
                            "target": arguments_target, **outcome})
                 return {**outcome, "sequence": sequence}
+            if operation == "targets":
+                assert self._read_targets is not None
+                target_object = arguments["object"]
+                assert isinstance(target_object, int)
+                self._target_reads += 1
+                try:
+                    targets = dict(await self._read_targets(
+                        self._target_reads, target_object, bool(arguments.get("moved", False))))
+                    answer = {**targets, "sequence": sequence, "target_read": self._target_reads}
+                    if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                        raise NavigationRefused("target list is too large for the mailbox")
+                except NavigationRefused:
+                    # Memory reads are harmless: a refusal consumes neither sequence nor budget.
+                    self._next -= 1
+                    self._target_reads -= 1
+                    raise
+                self._log({"sequence": sequence, "operation": "targets",
+                           "object": target_object, "target_read": self._target_reads})
+                return answer
             if operation == "weapons":
                 assert self._read_weapons is not None
                 unit_object = arguments["object"]
