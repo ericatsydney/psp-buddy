@@ -194,9 +194,15 @@ class _Run:
                 raise _Stop("plan", "targets_unreadable", {"detail": str(exc)}) from exc
             names = [w.get("name") for w in self.weapons]
             wanted = self.attack.get("weapon")
-            if wanted not in names:
+            slots = self.attack.get("slot")
+            rows = [i for i, w in enumerate(self.weapons)
+                    if w.get("name") == wanted and (slots is None or w.get("slot") == slots)]
+            if not rows:
                 raise _Stop("plan", "unknown_weapon", {"weapons": names})
-            self.row = names.index(wanted)
+            if len(rows) > 1:
+                raise _Stop("plan", "ambiguous_weapon",
+                            {"slots": [self.weapons[i].get("slot") for i in rows]})
+            self.row = rows[0]
             entry = answer["weapons"][self.row]  # type: ignore[index]
             if not entry["usable"]:
                 raise _Stop("plan", "weapon_unusable", {"why": entry["unusable_reason"]})
@@ -283,8 +289,10 @@ class _Run:
         self.guard()
         menu = await self.io.menu_row()
         row = menu[0] if menu else -1
-        for _ in range(self.row):
-            await self.tap("down")
+        if row < 0:
+            raise _Stop("weapon", "weapon_row_unreadable", retreat=self.depth)
+        for _ in range(abs(self.row - row)):
+            await self.tap("down" if self.row > row else "up")
             await self.io.sleep(0.25)
         for _ in range(8):
             menu = await self.io.menu_row()
@@ -341,12 +349,13 @@ class _Run:
         if unit is None or not isinstance(rows, list):
             raise _Stop("fire", "unit_not_readable")
         weapon = rows[self.row]
+        costs = bool(weapon.get("max_ammo")) or bool(weapon.get("en_cost"))
         await self.tap("start")
         spent = False
         # No memory reads while the battle scene loads: pausing the CPU then wedged the emulator
         # (live trials act1/act2, 20 Oct).
         await self.io.sleep(ANIMATION_SECONDS)
-        for _ in range(FIRE_POLLS):
+        for _ in range(FIRE_POLLS if costs else 0):
             state = await self.steady(self.io.state)
             now = _find(_units(state), self.unit_object)
             again = await self.steady(lambda: self.io.read_weapons(self.unit_object))
@@ -358,6 +367,10 @@ class _Run:
                 spent = True
                 break
             await self.io.sleep(1.5)
+        if not costs:
+            # Nothing is spent, so memory cannot confirm Start: the result dialog does (result()).
+            self.record("fire", confirmed_by="result_dialog")
+            return
         if not spent:
             raise _Stop("fire", "start_not_confirmed")
         self.record("fire", ammo=[weapon.get("ammo"), new.get("ammo")],
@@ -417,6 +430,11 @@ async def run_act(request: Mapping[str, object], io: ActIO, *, commit: bool = Fa
         return await _finish(run, "done", io)
     except ActIOError as exc:
         return {"ok": False, "stage": run.current, "reason": f"io_error: {exc}",
+                "facts": {}, "stages": run.stages, "needs_screenshot": True}
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        # Data that changed shape mid-run (e.g. a shorter weapon list): report, never raise,
+        # because an exception would disable the helper with the emulator on an open menu.
+        return {"ok": False, "stage": run.current, "reason": f"unexpected_data: {exc!r}",
                 "facts": {}, "stages": run.stages, "needs_screenshot": True}
     except _Stop as stop:
         if stop.retreat:

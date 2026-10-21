@@ -95,7 +95,9 @@ class SimGame:
             self.screen = 'weapon_list' if s == 'target_select' else 'target_select'
         elif s == 'forecast' and button == 'start' and not self.flags.get('start_ignored'):
             assert self.weapon is not None
-            self.weapon['ammo'] -= 1
+            if self.weapon['ammo'] is not None:
+                self.weapon['ammo'] -= 1
+            self.acting['en'] -= self.weapon.get('en_cost', 0)
             self.screen, self.combat_reads = 'combat', 0
         elif s == 'result' and button == 'circle' and not self.flags.get('dismiss_never'):
             assert self.acting is not None
@@ -384,3 +386,62 @@ def test_the_deadline_stops_the_macro_before_an_input_it_could_not_finish():
     result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
     assert result['ok'] is False and result['reason'] == 'act_deadline'
     assert 'start' not in sim.log
+
+
+def test_duplicate_weapon_names_need_a_slot_and_the_slot_picks_the_row():
+    sim = SimGame()
+    sim.weapons.append({'slot': 4, 'name': 'BeamRifle', 'min_range': 1, 'max_range': 8,
+                        'max_ammo': 0, 'ammo': None, 'en_cost': 5, 'flags': {'p': True}})
+    ambiguous = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert ambiguous['ok'] is False and ambiguous['reason'] == 'ambiguous_weapon'
+    assert ambiguous['facts']['slots'] == [3, 4] and sim.log == []
+    wanted = instruction(move_to=[5, 7], attack={'weapon': 'BeamRifle', 'slot': 4,
+                                                 'target_object': 2000})
+    result = run(act.run_act(wanted, sim, commit=True))
+    assert result['ok'] is True and sim.weapon['slot'] == 4 and sim.log.count('down') == 3
+    wrong = instruction(move_to=[5, 7], attack={'weapon': 'Vulcan', 'slot': 3,
+                                                'target_object': 2000})
+    assert run(act.run_act(wrong, SimGame(), commit=True))['reason'] == 'unknown_weapon'
+
+
+def test_a_weapon_without_ammo_or_en_cost_is_fired_and_confirmed_by_the_result_dialog():
+    sim = SimGame()
+    sim.weapons[2].update(max_ammo=0, ammo=None, en_cost=0)
+    request = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    sim.units[2].update(tile_x=6, tile_y=8)         # four tiles from the unit at (5, 5)
+    result = run(act.run_act(request, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    fire = next(s for s in result['stages'] if s['stage'] == 'fire')
+    assert fire['facts']['confirmed_by'] == 'result_dialog' and sim.log.count('start') == 1
+    assert sim.units[0]['counted_as_unmoved'] is False
+
+
+def test_unexpected_data_errors_become_a_stage_report_not_an_exception():
+    sim = SimGame()
+    real = sim.read_weapons
+    calls = []
+
+    async def shrinking(unit_object):
+        calls.append(1)
+        answer = await real(unit_object)
+        if len(calls) >= 2:
+            answer['weapons'] = answer['weapons'][:1]      # the list changed after the plan
+        return answer
+    sim.read_weapons = shrinking
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['stage'] == 'fire'
+    assert result['reason'].startswith('unexpected_data:') and result['needs_screenshot'] is True
+
+
+def test_weapon_list_that_opens_on_another_row_is_walked_from_that_row():
+    sim = SimGame()
+    real = sim.press
+
+    async def press(button, frames=2):
+        await real(button, frames)
+        if sim.screen == 'weapon_list' and button == 'circle' and sim.row == 0:
+            sim.row = 1                              # the list reopened on the last-used row
+    sim.press = press
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
+    assert result['ok'] is True and sim.weapon['name'] == 'BeamRifle'
+    assert sim.log.count('down') == 1 and sim.log.count('up') == 0

@@ -28,6 +28,8 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  calls.splice(3,1);
  const act={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288,move_to:[3,4],attack:{weapon:'BeamRifle',target_object:149303912},commit:false};
  await client.callTool({name:'ppsspp_act',arguments:act});assert.equal(calls.at(-1)[0],'act');
+ await client.callTool({name:'ppsspp_act',arguments:{...act,attack:{...act.attack,slot:3}}});assert.equal(calls.at(-1)[0],'act');
+ for (const slot of ['3',-1,21,true]) await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{...act,attack:{...act.attack,slot}}}));
  await client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'attack_forecast',unit_object:149303288,attack:act.attack,phase:'fire'}});
  for (const bad of [{unit_object:5},{unit_object:'1'},{move_to:[1]},{move_to:[1,'2']},{attack:{weapon:'x'}},{attack:{weapon:'x',target_object:1,extra:1}},{attack:{weapon:'',target_object:149303912}},{commit:'yes'},{phase:'other'},{context:'info'},{button:'circle'}]) await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{...act,...bad}}));
  await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288}}));

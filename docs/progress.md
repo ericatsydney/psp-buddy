@@ -250,4 +250,17 @@ Lessons: state reads take 14-19 s (collector), so a run takes about 70 s and a f
 emulator "paused" and wedged the helper in runs act1-act4 (cost four relaunches), so the macro now stops cooperatively (95 s budget) and `commit:true`
 falls back to stopping at the forecast. No reads during the first 8 s after Start. Known gaps: duplicate weapon names pick the first; attack-only
 (second menu entry) and Z page-2 weapons untested live; a missing PSP/SCREENSHOT folder must be created before the first screenshot; reads are slow
-(a lighter state read would help). Not committed.
+(a lighter state read would help). Committed in f2fad69.
+
+M6 review (21 Oct, `9839754..HEAD`, 8 findings): fixed with tests: duplicate weapon names (the instruction may carry a `slot`; a duplicate name without one is
+refused as `ambiguous_weapon`), weapons with neither ammo nor EN cost (the result dialog confirms Start), unexpected data errors during a run (reported as a stage, never
+raised), a missing SCREENSHOT folder after an act, the weapon-list start row (the walk now starts from the real row), and this stale note. Left as follow-ups: the will requirement
+is not checked (pilot will is not decoded), and each fire poll still runs two slow reads (a one-actor EN/ammo read would be cheaper). Not yet live-checked: a duplicate-name
+weapon by slot and a free weapon (offline tests only).
+
+M6 live check (21 Oct, run m6-run-20261021T1615, backup backups/m6-original-20261021T081514Z-*, SAVEDATA + PPSSPP_STATE 42/42 unchanged after graceful close; view-only, no Start): Destiny's two `HiEnergyBeamGun`
+weapons. Without `slot`, `ppsspp_act` returned `ambiguous_weapon` with slots [1, 3] and sent no input. With `slot:3` on Vayeate (16,8) the macro reached weapon-menu row 3 (the 4th row),
+and the forecast hit 61% matched the screen (the screen shows the same name on both guns, so the row rests on the memory read). Both guns reach that foe (the slot-1 range reads 2~7 here), so no foe is
+reachable by slot 3 alone. Cross from the forecast backed out one level, to target select. The act took about 70 s. Still untested live: a free weapon (am0/en0): none among the allies on this map.
+
+M6 closed (21 Oct): fixes committed; free weapon (am0/en0) remains untested live (offline tests only).

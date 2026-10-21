@@ -209,3 +209,45 @@ def test_act_io_failure_is_reported_not_fatal(owned, tmp_path):
         with pytest.raises(NavigationRefused):
             await service.execute('state', {'sequence': 2})
     asyncio.run(scenario())
+
+
+def test_attack_may_carry_a_weapon_slot_and_it_must_be_an_integer(owned, tmp_path):
+    sim = shifted_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    with_slot = dict(move_to=[5, 7], attack={'weapon': 'BeamRifle', 'slot': 3,
+                                              'target_object': BASE + 2000})
+
+    async def scenario():
+        for bad in ('3', True, -1, 21):
+            broken = dict(with_slot, attack=dict(with_slot['attack'], slot=bad))
+            with pytest.raises(NavigationRefused):
+                await service.execute('act', frame(sequence=1, **request(**broken)))
+        shown = await service.execute('act', frame(sequence=1, **request(**with_slot)))
+        assert shown['ok'] is True and shown['phase'] == 'forecast'
+    asyncio.run(scenario())
+
+
+def test_a_missing_screenshot_folder_after_an_act_does_not_disable_the_helper(owned, tmp_path):
+    import shutil
+    sim = shifted_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    shots = owned[0].memstick_root / 'PSP/SCREENSHOT'
+    request_ = frame(sequence=1, **request(unit_object=BASE + 1001, move_to=[3, 2]))
+    shutil.rmtree(shots)
+
+    async def scenario():
+        # the frame itself must exist for the request check, so recreate it, then drop the folder
+        # while the macro runs
+        shots.mkdir()
+        (shots / request_['screen_file']).write_bytes(picture())
+        real = adapter.press
+
+        async def press(button, frames=2):
+            if shots.exists():
+                shutil.rmtree(shots)
+            return await real(button, frames)
+        adapter.press = press
+        result = await service.execute('act', request_)
+        assert result['ok'] is True
+        assert not service._failed
+    asyncio.run(scenario())

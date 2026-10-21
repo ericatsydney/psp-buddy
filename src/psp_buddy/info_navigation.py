@@ -459,10 +459,14 @@ class InfoNavigation:
         if attack is not None:
             weapon = attack.get("weapon") if isinstance(attack, dict) else None
             victim = attack.get("target_object") if isinstance(attack, dict) else None
-            if (not isinstance(attack, dict) or set(attack) != {"weapon", "target_object"}
+            slot = attack.get("slot") if isinstance(attack, dict) else None
+            if (not isinstance(attack, dict)
+                    or not {"weapon", "target_object"} <= set(attack) <= {"weapon", "target_object",
+                                                                           "slot"}
                     or not isinstance(weapon, str) or not 0 < len(weapon) <= 64
-                    or type(victim) is not int or not RAM_START <= victim < RAM_END):
-                raise ValueError("attack needs a weapon name and a target object")
+                    or type(victim) is not int or not RAM_START <= victim < RAM_END
+                    or ("slot" in attack and (type(slot) is not int or not 0 <= slot < 21))):
+                raise ValueError("attack needs a weapon name, an optional slot and a target object")
         if move_to is None and attack is None:
             raise ValueError("act needs a move_to or an attack")
         if type(arguments.get("commit", False)) is not bool:
@@ -559,7 +563,8 @@ class InfoNavigation:
             commit=bool(arguments.get("commit", False)), phase=phase)
         self._act_pending = (key if outcome.get("ok") and outcome.get("phase") == "forecast"
                              else None)
-        self._stale = {p.name for p in self._root.iterdir()}
+        # The folder may not exist yet; that must not fail an action that already happened.
+        self._stale = {p.name for p in self._root.iterdir()} if self._root.is_dir() else set()
         return outcome
 
     def _check_goto(self, arguments: Mapping[str, object], keys: set[str]) -> str:
