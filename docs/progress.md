@@ -49,7 +49,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] M3 `goto_tile` (10/10 random tiles, memory-verified) and `probe_move_range` (reachable tiles match the on-screen overlay, 526/526 tiles for Destiny).
 - [x] M4 Weapon and target probing. Done: `ppsspp_read_weapons` (memory-only, verified live) and `ppsspp_read_targets` (enemies in range per weapon, Manhattan distance; verified live on 20 Oct: Destiny CIWS has no target, the 3~8 gun lists (16,8) and (18,8), matching the 18 Oct previews). `ppsspp_read_hit` (hover hit chance from the two s32 at 0x08ED055C, only meaningful in target select; verified live 20 Oct: 42% and 61% matched the screen, -10000 on a non-target). Damage forecasts are not decoded.
 - [x] M5 `act` macro (`ppsspp_act`; select, Move, weapon row, target, forecast, Start, dismiss; every stage memory-verified). Live 20 Oct: Destiny move + FlashEdge2 and Z Gundam move + Beam Rifle, both executed. See the 20 Oct M5 note below.
-- [ ] M6 Independent review, documentation and handover notes.
+- [x] M6 Independent review, documentation and handover notes.
 
 ## 3. Today/session goal — 20 October
 
