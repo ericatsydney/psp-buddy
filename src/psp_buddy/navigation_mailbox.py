@@ -10,11 +10,12 @@ from pathlib import Path
 from uuid import uuid4
 
 OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "targets", "hit", "goto",
-              "probe_move", "act")
+              "probe_move", "act", "plan_act")
 
 
 def _deadline(operation: str) -> int:
-    return 10 if operation == "press" else 120 if operation in ("goto", "probe_move", "act") else 60
+    slow = ("goto", "probe_move", "act", "plan_act")
+    return 10 if operation == "press" else 120 if operation in slow else 60
 
 
 NavigationHandler = Callable[[str, dict[str, object]], Awaitable[dict[str, object]]]

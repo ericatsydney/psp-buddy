@@ -52,6 +52,18 @@ function validate(operation, args) {
         (!Object.hasOwn(args,'move_to') && !Object.hasOwn(args,'attack'))) throw new Error('Invalid act request');
     return;
   }
+  if (operation === 'plan_act') {
+    const keys = Object.keys(args);
+    const base = ['sequence','screen_file','screen_sha256','context','unit_object','policy'];
+    const objectOk = (n) => Number.isSafeInteger(n) && n >= 0x08800000 && n < 0x0A000000;
+    if (keys.some(k => ![...base,'bosses','min_hit'].includes(k)) || !base.every(k => Object.hasOwn(args,k)) ||
+        !Number.isSafeInteger(args.sequence) || args.sequence < 1 || typeof args.screen_file !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) || !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') ||
+        args.context !== 'map' || !objectOk(args.unit_object) || typeof args.policy !== 'string' || args.policy.length > 400 ||
+        (Object.hasOwn(args,'bosses') && (!Array.isArray(args.bosses) || args.bosses.length > 8 || !args.bosses.every(objectOk))) ||
+        (Object.hasOwn(args,'min_hit') && (!Number.isSafeInteger(args.min_hit) || args.min_hit < 1 || args.min_hit > 100))) throw new Error('Invalid plan_act request');
+    return;
+  }
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : operation === 'goto' ? [...common,'target'] : operation === 'probe_move' ? [...common,'tile'] : common;
   if (!['press','verify','observe','dump','state','targets','hit','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
@@ -151,7 +163,7 @@ export async function createNavigationClient(mailbox, trialId, { timeoutMs = 125
         } finally { await handle.close(); }
         try { await link(temporary, pending); published = true; }
         finally { await unlink(temporary); }
-        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move' || operation === 'act') ? 125000 : 65000);
+        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move' || operation === 'act' || operation === 'plan_act') ? 125000 : 65000);
         while (Date.now() < deadline) {
           await safeDirectory(root);
           let value;
@@ -189,12 +201,13 @@ export function createNavigationServer(client) {
     {name:'ppsspp_read_hit',description:'Read the hit chance under the cursor from memory; meaningful only while a weapon target select is open (-10000 = not a target). Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
+    {name:'ppsspp_plan_act',description:'From a policy text alone: pick one legal Move + Attack for one ready ally unit, run it to the attack forecast and fire only if the forecast agrees with the plan (otherwise back out and report why). min_hit (default 1) is the lowest forecast hit% it will fire at. Appends each fired attack to damage-log.jsonl. Needs the act declaration and a fresh map screenshot.',inputSchema:{type:'object',properties:{...common,unit_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},policy:{type:'string',maxLength:400},bosses:{type:'array',items:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},maxItems:8},min_hit:{type:'integer',minimum:1,maximum:100}},required:[...Object.keys(common),'unit_object','policy'],additionalProperties:false}},
     {name:'ppsspp_act',description:'Follow one tactical instruction for one ally unit with memory checks at every stage: select, optional Move to a tile, optional Attack with a named weapon on a target object. commit=false stops at the attack forecast; phase=fire (with an attack_forecast screenshot) presses Start and dismisses the result. Needs the act declaration.',inputSchema:{type:'object',properties:{...common,unit_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},move_to:{type:'array',items:{type:'integer'},minItems:2,maxItems:2},attack:{type:'object',properties:{weapon:{type:'string',minLength:1,maxLength:64},slot:{type:'integer',minimum:0,maximum:20},target_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF}},required:['weapon','target_object'],additionalProperties:false},commit:{type:'boolean'},phase:{enum:['run','fire']}},required:[...Object.keys(common),'unit_object'],additionalProperties:false}},
     {name:'ppsspp_verify_info',description:'Verify selected Destiny Info through the protected controller.',inputSchema:{type:'object',properties:common,required:Object.keys(common),additionalProperties:false}},
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act',ppsspp_plan_act:'plan_act'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

@@ -15,11 +15,12 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from . import act as act_macro
-from . import battle_state
+from . import battle_state, plan_act
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
 from .navigation_mailbox import NavigationRefused
+from .policy import parse_policy
 from .weapons import RAM_END, RAM_START
 
 MAX_TAPS = 16
@@ -304,7 +305,7 @@ class InfoNavigation:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
         if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "targets",
-                             "hit", "goto", "probe_move", "act"):
+                             "hit", "goto", "probe_move", "act", "plan_act"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -347,6 +348,8 @@ class InfoNavigation:
             return self._check_goto(arguments, keys), None
         if operation == "act":
             return self._check_act(arguments, keys), None
+        if operation == "plan_act":
+            return self._check_plan_act(arguments, keys), None
         if operation == "probe_move":
             return self._check_probe(arguments, keys), None
         if operation == "dump":
@@ -482,6 +485,52 @@ class InfoNavigation:
         if name in self._stale or self._uses.get(name, 0) >= 1:
             raise ValueError("act needs a fresh screenshot")
         return name
+
+    def _check_plan_act(self, arguments: Mapping[str, object], keys: set[str]) -> str:
+        decl = self._declaration
+        required = BASE_KEYS | {"unit_object", "policy"}
+        if (decl is None or decl["actions"] != ["act"] or not required <= keys
+                or not keys <= required | {"bosses", "min_hit"}
+                or self._read_state is None or self._read_weapons is None
+                or self._read_hit is None or self._read_cursor is None
+                or self._read_menu_row is None or self._map_size is None):
+            raise ValueError("plan_act needs the act declaration, all memory readers and a request")
+        if arguments["context"] != "map":
+            raise ValueError("plan_act needs a map screenshot")
+        unit_object, text = arguments["unit_object"], arguments["policy"]
+        bosses = arguments.get("bosses", [])
+        if (type(unit_object) is not int or not RAM_START <= unit_object < RAM_END
+                or not isinstance(text, str) or len(text) > 400
+                or not isinstance(bosses, list) or len(bosses) > 8
+                or not all(type(b) is int and RAM_START <= b < RAM_END for b in bosses)):
+            raise ValueError("plan_act needs a unit, a policy text and optional bosses")
+        min_hit = arguments.get("min_hit", plan_act.MIN_HIT)
+        if type(min_hit) is not int or not 1 <= min_hit <= 100:
+            raise ValueError("min_hit must be a whole number from 1 to 100")
+        parse_policy(text)          # an unsupported clause is refused before any input
+        if self._act_pending is not None:
+            raise ValueError("a forecast is waiting: fire it or cancel it first")
+        if self._acts >= MAX_ACTS or self._act_presses + ACT_PRESS_RESERVE > MAX_ACT_PRESSES:
+            raise ValueError("act budget for this trial is exhausted")
+        name = self._frame(arguments)
+        if name in self._stale or self._uses.get(name, 0) >= 1:
+            raise ValueError("plan_act needs a fresh screenshot")
+        return name
+
+    async def _run_plan_act(self, arguments: Mapping[str, object]) -> dict[str, object]:
+        self._acts += 1
+        self._act_deadline = time.monotonic() + ACT_SECONDS
+        unit_object, text = arguments["unit_object"], arguments["policy"]
+        assert type(unit_object) is int and isinstance(text, str)
+        bosses = arguments.get("bosses", [])
+        assert isinstance(bosses, list)
+        outcome: dict[str, object] = await plan_act.plan_and_act(
+            self._act_io(), parse_policy(text), unit_object, bosses=frozenset(bosses),
+            min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
+            damage_log=self._evidence / "damage-log.jsonl")
+        self._act_pending = None
+        self._stale = {p.name for p in self._root.iterdir()} if self._root.is_dir() else set()
+        return outcome
 
     @staticmethod
     def _act_key(arguments: Mapping[str, object]) -> dict[str, object]:
@@ -664,6 +713,17 @@ class InfoNavigation:
                            "ok": answer.get("ok"), "phase": answer.get("phase"),
                            "stage": answer.get("stage"), "reason": answer.get("reason"),
                            "unit_object": arguments["unit_object"]})
+                return answer
+            if operation == "plan_act":
+                self._evidence.mkdir(parents=True, exist_ok=True)
+                outcome = await self._run_plan_act(arguments)
+                answer = {**outcome, "sequence": sequence, "acts_used": self._acts,
+                          "act_presses_used": self._act_presses}
+                if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                    answer = {**answer, "outcome": {"truncated": True}, "truncated": True}
+                self._log({"sequence": sequence, "operation": "plan_act", "screen": name,
+                           "ok": answer.get("ok"), "phase": answer.get("phase"),
+                           "reason": answer.get("reason"), "unit_object": arguments["unit_object"]})
                 return answer
             if operation == "hit":
                 assert self._read_hit is not None

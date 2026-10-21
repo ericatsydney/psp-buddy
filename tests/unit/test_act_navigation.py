@@ -251,3 +251,73 @@ def test_a_missing_screenshot_folder_after_an_act_does_not_disable_the_helper(ow
         assert result['ok'] is True
         assert not service._failed
     asyncio.run(scenario())
+
+
+def test_plan_act_is_a_known_mailbox_operation():
+    assert 'plan_act' in OPERATIONS
+
+
+def plan_sim():
+    sim = shifted_sim()
+    for unit in sim.units:
+        unit['max_hp'] = unit['hp']
+    for weapon, power in zip(sim.weapons, (1000, 2000, 3000), strict=True):
+        weapon['power'] = power
+    return sim
+
+
+def test_plan_act_chooses_gates_fires_and_logs(owned, tmp_path):
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        answer = await service.execute('plan_act', frame(
+            sequence=1, policy='cheap weapons below 20%', **request()))
+        assert answer['ok'] is True and answer['phase'] == 'fired'
+        assert answer['plan']['act']['attack']['weapon'] == 'Grenade'
+        with pytest.raises(NavigationRefused):                 # same screenshot cannot be reused
+            await service.execute('plan_act', {**frame(sequence=2, policy='', **request()),
+                                               'screen_file': 'a1.png'})
+    asyncio.run(scenario())
+    assert adapter.sent.count('start') == 1
+    assert (tmp_path / 'evidence' / 'damage-log.jsonl').read_text(encoding='utf-8').count('\n') == 1
+
+
+@pytest.mark.parametrize('extra', [{'policy': 'win the battle'}, {'policy': 5}, {'bosses': [1]},
+                                   {'unit_object': 5}, {'move_to': [1, 2]}])
+def test_plan_act_refuses_bad_requests_before_any_press(owned, tmp_path, extra):
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    body = {'policy': '', **request(), **extra}
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):
+            await service.execute('plan_act', frame(sequence=1, **body))
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_plan_act_needs_the_act_declaration(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim(), declaration=None)
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):
+            await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_plan_act_min_hit_is_validated_and_applied(owned, tmp_path):
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        for bad in (0, 101, '5'):
+            with pytest.raises(NavigationRefused):
+                await service.execute('plan_act', frame(sequence=1, policy='', min_hit=bad,
+                                                        **request()))
+        answer = await service.execute('plan_act', frame(sequence=1, policy='', min_hit=90,
+                                                         **request()))
+        assert answer['phase'] == 'declined' and answer['reason'] == 'hit_too_low'
+    asyncio.run(scenario())
+    assert 'start' not in adapter.sent
