@@ -73,7 +73,7 @@ def test_out_of_reach_foe_opens_move_range_once_then_moves_and_attacks():
     sim = Game()
     sim.units[2]['tile_y'] = 12                 # 7 tiles away: only reachable after a move
     result = run(plan_act.plan_and_act(sim, POLICY, 1000))
-    assert result['ok'] and result['phase'] == 'fired'
+    assert result['ok'] and result['phase'] == 'fired' and result['moved'] is True
     act = result['plan']['act']
     assert act['attack']['weapon'] == 'BeamRifle' and act['move_to'] == [5, 8]
     assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 8)
@@ -95,7 +95,7 @@ def test_injured_unit_hands_over_without_input():
 
 
 def test_no_time_left_to_fire_backs_out_instead():
-    sim = Game(time_left=60)
+    sim = Game(time_left=50)
     result = run(plan_act.plan_and_act(sim, POLICY, 1000))
     assert result['phase'] == 'declined' and result['reason'] == 'no_time_to_fire'
     assert 'start' not in sim.log and sim.screen == 'map'
@@ -138,12 +138,15 @@ def test_min_hit_from_the_caller_declines_a_low_forecast():
     assert 'start' not in sim.log and sim.screen == 'map'
 
 
-def test_decline_after_a_move_says_the_unit_stays_moved():
+def test_decline_after_a_move_says_the_unit_stays_moved_and_waits():
+    # MVP rule (user, 22 Oct): a moved unit that cannot finish its attack chooses Standby.
     sim = Game()
     sim.units[2]['tile_y'] = 12
     result = run(plan_act.plan_and_act(sim, POLICY, 1000, min_hit=90))
     assert result['phase'] == 'declined' and result['moved'] is True
+    assert result['standby'] is True and sim.screen == 'map'
     assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 8)
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.log[-2:] == ['down', 'circle']
 
 
 def test_overlay_not_centred_on_the_unit_means_no_move_plan():
@@ -155,7 +158,69 @@ def test_overlay_not_centred_on_the_unit_means_no_move_plan():
 
 
 def test_overlay_is_skipped_when_there_is_no_time_to_move_and_fire():
-    sim = Game(time_left=60)
+    sim = Game(time_left=50)
     sim.units[2]['tile_y'] = 12
     result = run(plan_act.plan_and_act(sim, POLICY, 1000))
     assert result['reason'] == 'no_target' and sim.log == []
+
+
+def test_greyed_weapon_is_excluded_and_the_next_one_is_fired():
+    # Force Impulse (22 Oct live): the chosen weapon is greyed out, the target select never opens.
+    sim = Game(grey_rows=(1,))                  # Grenade (row 1) is the planned median weapon
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['ok'] and result['phase'] == 'fired'
+    assert result['plan']['act']['attack']['weapon'] != 'Grenade'
+    assert result['excluded'] == [1]
+    assert sim.log.count('start') == 1 and sim.screen == 'map'
+
+
+def test_every_weapon_greyed_ends_as_a_failed_report_after_bounded_retries():
+    sim = Game(grey_rows=(0, 1, 2))
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['ok'] is False and result['phase'] in ('failed', 'handover')
+    assert 'start' not in sim.log and sim.screen == 'map'
+    assert len(result.get('excluded', [])) <= plan_act.MAX_REPLANS
+
+
+def test_replan_is_not_tried_after_the_unit_has_moved():
+    sim = Game(grey_rows=(2,))
+    sim.units[2]['tile_y'] = 12                 # only BeamRifle (row 2, P) reaches: needs a move
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['ok'] is False and result['phase'] == 'failed'
+    assert 'excluded' not in result or result['excluded'] == []
+    assert result['moved'] is True and result['standby'] is True
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.screen == 'map'
+
+
+def test_a_standby_the_game_does_not_confirm_is_reported_and_closed():
+    sim = Game(grey_rows=(2,), menu_standby_ignored=True)
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['phase'] == 'failed' and result['moved'] is True
+    assert result['standby'] is False and sim.units[0]['counted_as_unmoved'] is True
+    assert sim.log[-1] == 'cross'
+
+
+def test_a_failure_that_did_not_back_out_does_not_press_standby():
+    sim = Game(menu_window=1)                   # the weapon list looks too short: no back-out
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['outcome']['stage'] == 'attack_menu' and result['moved'] is True
+    assert 'standby' not in result and sim.log[-1] == 'circle'
+
+
+def test_a_failure_before_any_move_does_not_press_standby(monkeypatch):
+    monkeypatch.setattr(plan_act, 'MAX_REPLANS', 0)
+    sim = Game(grey_rows=(1,))                  # Grenade (row 1) is the planned median weapon
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['phase'] == 'failed' and result['moved'] is False and 'standby' not in result
+
+
+def test_standby_is_not_pressed_without_time_for_it(monkeypatch):
+    monkeypatch.setattr(plan_act, 'STANDBY_NEEDS', 10 ** 6)     # no time left for Standby
+    sim = Game(time_left=500)
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, min_hit=90))
+    assert result['phase'] == 'declined' and result['moved'] is True
+    assert result['standby'] is False and sim.units[0]['counted_as_unmoved'] is True
+    assert sim.log[-3:] == ['cross', 'cross', 'cross']

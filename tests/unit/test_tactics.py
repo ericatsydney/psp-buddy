@@ -26,9 +26,10 @@ def unit(obj: int, x: int, y: int, group: int, hp: int, max_hp: int, en: int = 1
 
 
 def weapon(slot: int, name: str, power: int, lo: int, hi: int, *, p: bool, ammo: int | None = None,
-           max_ammo: int = 0, en_cost: int = 0) -> dict[str, Any]:
+           max_ammo: int = 0, en_cost: int = 0, will: int = 0) -> dict[str, Any]:
     return {"name": name, "slot": slot, "power": power, "min_range": lo, "max_range": hi,
-            "max_ammo": max_ammo, "ammo": ammo, "en_cost": en_cost, "flags": {"p": p}}
+            "max_ammo": max_ammo, "ammo": ammo, "en_cost": en_cost, "flags": {"p": p},
+            "will": will}
 
 
 # Destiny's list from act1-run-20261020T2204 (powers include upgrade and part bonus).
@@ -199,6 +200,65 @@ def test_move_energy_is_reserved_before_choosing_a_move_weapon() -> None:
     enough = state()
     enough["units"][0]["en"] = 36
     assert attack(plan_attack(enough, weapons(short), POLICY, DESTINY))["move_to"] == [19, 6]
+
+
+def test_weapons_needing_more_will_than_assumed_are_never_chosen() -> None:
+    rows = [weapon(0, "Gun", 1000, 1, 9, p=True),
+            weapon(1, "Big", 9000, 1, 9, p=True, will=110)]
+    chosen = attack(plan_attack(state(), weapons(rows), POLICY, DESTINY,
+                                bosses=frozenset({NEAR_FOE})))
+    assert chosen["attack"]["slot"] == 0          # will is not decoded: 100 is assumed
+    ok = plan_attack(state(), weapons(rows), POLICY, DESTINY, bosses=frozenset({NEAR_FOE}),
+                     will=130)
+    assert attack(ok)["attack"]["slot"] in (0, 1)
+    only_big = plan_attack(state(), weapons(rows[1:]), POLICY, DESTINY)
+    assert only_big["reason"] == "no_target"
+
+
+def test_only_weapons_with_a_certain_menu_row_are_chosen() -> None:
+    # Strike Freedom (22 Oct live): SuperDragoon is a MAP weapon whose shown power (3600) differs
+    # from memory (3700), so HiEnergy's row is unknown; MAP weapons are never chosen. Will does not
+    # hide weapons (shown greyed); EN below a cost may, which makes every stronger row unknown.
+    rows = [weapon(0, "CIWS", 2000, 1, 9, p=True),
+            weapon(1, "Saber", 3200, 1, 9, p=True, en_cost=5),
+            weapon(2, "Dragoon", 3700, 1, 9, p=True, will=0),
+            weapon(3, "HiEnergy", 3600, 1, 9, p=True),
+            weapon(4, "Calidus", 4100, 1, 9, p=True, en_cost=35)]
+    rows[2]["flags"]["map"] = True
+    rows[2]["base_power"] = 3500                         # shown 3500..3700 (live: 3600)
+    for en, expected in ((230, 4), (40, 4), (4, 0)):
+        st = state(near_hp=25000, far_hp=24000)          # a healthy boss: strongest usable weapon
+        st["units"][0]["en"] = en
+        result = plan_attack(st, weapons(rows), POLICY, DESTINY, bosses=frozenset({NEAR_FOE}))
+        assert attack(result)["attack"]["slot"] == expected, en
+    rows[4]["en_cost"] = 0
+    rows[4]["flags"]["condition"] = True                 # hidden by the menu (record byte 26)
+    st = state(near_hp=25000, far_hp=24000)
+    result = plan_attack(st, weapons(rows), POLICY, DESTINY, bosses=frozenset({NEAR_FOE}))
+    assert attack(result)["attack"]["slot"] == 1
+
+
+def test_menu_rows_are_counted_in_power_order() -> None:
+    # The menu lists weapons by power, lowest first (22 Oct live: Force Impulse). A possibly
+    # hidden weapon only shifts the rows of stronger weapons; equal powers have no known order.
+    boss = {"bosses": frozenset({NEAR_FOE})}
+    rows = [weapon(0, "CIWS", 2000, 1, 9, p=True),
+            weapon(1, "Super", 5000, 1, 9, p=True, en_cost=250),
+            weapon(2, "Rifle", 3000, 1, 9, p=True)]
+    st = state(near_hp=25000, far_hp=24000)
+    assert attack(plan_attack(st, weapons(rows), POLICY, DESTINY, **boss))["attack"]["slot"] == 2
+    tied = [weapon(0, "Bunker", 3100, 1, 9, p=True),
+            weapon(1, "Eagle", 3100, 1, 9, p=True),
+            weapon(2, "Vulcan", 2000, 1, 9, p=True)]
+    assert attack(plan_attack(st, weapons(tied), POLICY, DESTINY, **boss))["attack"]["slot"] == 2
+
+
+def test_excluded_slots_are_never_chosen() -> None:
+    first = attack(plan_attack(state(), weapons(), POLICY, DESTINY))["attack"]["slot"]
+    again = attack(plan_attack(state(), weapons(), POLICY, DESTINY, exclude={first}))
+    assert again["attack"]["slot"] != first
+    every = {w["slot"] for w in DESTINY_WEAPONS}
+    assert plan_attack(state(), weapons(), POLICY, DESTINY, exclude=every)["reason"] == "no_target"
 
 
 RETAINED = (Path(__file__).parents[2] / "local/move-attack-trial-20261017/spd4-run-20261021T2046"

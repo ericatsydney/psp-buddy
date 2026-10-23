@@ -29,7 +29,7 @@ function validate(operation, args) {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid hit request');
     return;
   }
-  if (operation === 'state') {
+  if (operation === 'state' || operation === 'turn_next') {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
     return;
   }
@@ -66,7 +66,7 @@ function validate(operation, args) {
   }
   const common = ['sequence','screen_file','screen_sha256','context'];
   const fields = operation === 'press' ? [...common,'button','duration','purpose','cursor_tile','highlighted_entry','destination_tile','weapon_name','target_name'] : operation === 'goto' ? [...common,'target'] : operation === 'probe_move' ? [...common,'tile'] : common;
-  if (!['press','verify','observe','dump','state','targets','hit','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
+  if (!['press','verify','observe','dump','state','turn_next','targets','hit','goto','probe_move'].includes(operation) || Object.keys(args).some(k=>!fields.includes(k)) ||
       !common.every(k=>Object.hasOwn(args,k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
       typeof args.screen_file !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) ||
       !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') || !CONTEXTS.includes(args.context)) throw new Error('Invalid navigation evidence');
@@ -199,6 +199,7 @@ export function createNavigationServer(client) {
     {name:'ppsspp_read_weapons',description:'Read the weapons of one unit (power, range, ammo, EN, flags) and pilot skills from memory by its unit object; sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF}},required:['sequence','object'],additionalProperties:false}},
     {name:'ppsspp_read_targets',description:'For each weapon of one unit, list the enemy units in range from its current tile (memory only, Manhattan distance). Set moved when the unit has already moved this turn.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},moved:{type:'boolean'}},required:['sequence','object'],additionalProperties:false}},
     {name:'ppsspp_read_hit',description:'Read the hit chance under the cursor from memory; meaningful only while a weapon target select is open (-10000 = not a target). Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
+    {name:'ppsspp_turn_next',description:'Memory only: which ready ally to play next this turn (nearest to a foe first), how many remain, the skipped units with reasons, and done/stopped. Records come from ppsspp_plan_act; turn-report.json is written to the evidence folder. Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
     {name:'ppsspp_plan_act',description:'From a policy text alone: pick one legal Move + Attack for one ready ally unit, run it to the attack forecast and fire only if the forecast agrees with the plan (otherwise back out and report why). min_hit (default 1) is the lowest forecast hit% it will fire at. Appends each fired attack to damage-log.jsonl. Needs the act declaration and a fresh map screenshot.',inputSchema:{type:'object',properties:{...common,unit_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},policy:{type:'string',maxLength:400},bosses:{type:'array',items:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},maxItems:8},min_hit:{type:'integer',minimum:1,maximum:100}},required:[...Object.keys(common),'unit_object','policy'],additionalProperties:false}},
@@ -207,7 +208,7 @@ export function createNavigationServer(client) {
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act',ppsspp_plan_act:'plan_act'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act',ppsspp_plan_act:'plan_act',ppsspp_turn_next:'turn_next'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

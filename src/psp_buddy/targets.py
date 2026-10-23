@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 HOVER_HIT_ADDRESS = 0x08ED055C   # two s32; 18 Oct runs matched the on-screen HIT%
 NO_TARGET = -10000
+MAX_RAW_HIT = 200
 ENEMY_GROUP = 12          # raw_menu_group_byte: 0 = ally, 4 = third force (HIT 0%), 12 = foe
 
 
@@ -79,9 +80,11 @@ def decode_hover_hit(blob: bytes) -> dict[str, object]:
         raise ValueError("hover hit needs 8 bytes")
     first, second = struct.unpack("<ii", blob)
     if first != second:
-        return {"state": "unknown", "hit": None}
+        return {"state": "unknown", "hit": None, "raw": [first, second]}
     if first == NO_TARGET:
         return {"state": "no_target", "hit": None}
     if 0 <= first <= 100:
         return {"state": "hit", "hit": first}
-    return {"state": "unknown", "hit": None}
+    if first <= MAX_RAW_HIT:         # the uncapped chance (22 Oct live: 105); the screen shows 100
+        return {"state": "hit", "hit": 100, "raw": first}
+    return {"state": "unknown", "hit": None, "raw": [first, second]}

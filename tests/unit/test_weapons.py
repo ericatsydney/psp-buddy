@@ -147,7 +147,8 @@ def test_destiny_weapons_decode_in_menu_order_with_effective_power():
     assert ciws['range_bonus_resolved'] is True
     assert (ciws['ammo'], ciws['max_ammo'], ciws['ammo_raw']) == (10, 10, 90)
     assert (ciws['hit'], ciws['crit']) == (25, 0)
-    assert ciws['flags'] == {'p': True, 'beam': False, 's': True, 'shooting': True}
+    assert ciws['flags'] == {'p': True, 'beam': False, 's': True, 'shooting': True,
+                             'map': False, 'condition': False}
     assert gun['ammo'] == 8 and gun['flags']['p'] is False and gun['flags']['beam'] is True
     assert edge['ammo'] is None and edge['en_cost'] == 5 and edge['flags']['p'] is True
     assert big['en_cost'] == 35 and big['terrain'] == 'AACA' and big['max_range_base'] == 7
@@ -174,6 +175,23 @@ def test_decode_name_is_full_width_shift_jis():
     for bad in (b'\x00abc', b'\x82', b'x' * 80, b'\x07\x00'):
         with pytest.raises(ValueError):
             decode_name(bad)
+
+
+# Strike Freedom records from RAM dump m9livex05 ram-01 (22 Oct): SuperDragoon is shown as a MAP
+# weapon (bytes 27-31 hold its area); Combo-Assault is one of the three weapons the menu hides.
+SUPER_DRAGOON = bytes.fromhex(
+    'ef59a208ef59a2084200ac0d01051e00140002008c0402020301000200020'
+    '10d0202000000000000030000 00'.replace(' ', ''))
+
+
+def test_map_and_hidden_condition_flags_come_from_the_record_tail():
+    flags = decode_weapon_record(SUPER_DRAGOON, 2)['flags']
+    assert flags['map'] is True and flags['condition'] is False
+    combo = bytearray(SUPER_DRAGOON)
+    combo[8] = 0x46                                 # slot 6
+    combo[26:32] = bytes([1, 0, 0, 0, 0, 0])
+    flags = decode_weapon_record(bytes(combo), 6)['flags']
+    assert flags['map'] is False and flags['condition'] is True
 
 
 def test_decode_weapon_record_rejects_bad_sizes_and_ranges():

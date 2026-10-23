@@ -24,11 +24,11 @@ class SimGame:
         ]
         self.weapons = [
             {'slot': 0, 'name': 'Vulcan', 'min_range': 1, 'max_range': 2, 'max_ammo': 10,
-             'ammo': 10, 'en_cost': 0, 'flags': {'p': True}},
+             'ammo': 10, 'en_cost': 0, 'flags': {'p': True}, 'power': 1000},
             {'slot': 1, 'name': 'Grenade', 'min_range': 1, 'max_range': 5, 'max_ammo': 6,
-             'ammo': 6, 'en_cost': 0, 'flags': {'p': False}},
+             'ammo': 6, 'en_cost': 0, 'flags': {'p': False}, 'power': 2000},
             {'slot': 3, 'name': 'BeamRifle', 'min_range': 2, 'max_range': 4, 'max_ammo': 10,
-             'ammo': 9, 'en_cost': 0, 'flags': {'p': True}},
+             'ammo': 9, 'en_cost': 0, 'flags': {'p': True}, 'power': 3000},
         ]
         self.screen = 'map'
         self.cursor = [5, 5]
@@ -41,6 +41,11 @@ class SimGame:
         self.log: list[str] = []
         self.combat_reads = 0
         self.flags = flags
+        self.linger = 0
+
+    def menu(self):
+        """The attack menu lists weapons by power, lowest first (22 Oct live: Force Impulse)."""
+        return sorted(self.weapons, key=lambda w: (w['power'], w['slot']))
 
     def unit_at(self, x, y):
         return next((u for u in self.units if (u['tile_x'], u['tile_y']) == (x, y)), None)
@@ -69,6 +74,9 @@ class SimGame:
                 self.screen = 'move_range'
             elif choice == 'Attack':
                 self.screen, self.row = 'weapon_list', 0
+            elif choice == 'Standby' and not self.flags.get('menu_standby_ignored'):
+                self.acting.update(counter_value=0, counted_as_unmoved=False)
+                self.screen = 'map'
         elif s == 'unit_menu' and button == 'cross':
             self.screen = 'map'
         elif s == 'move_range' and button == 'circle':
@@ -81,8 +89,13 @@ class SimGame:
                 self.entries, self.entry, self.screen = list(self.moved_entries), 0, 'unit_menu'
         elif s == 'move_range' and button == 'cross':
             self.screen = 'unit_menu'
+        elif s == 'weapon_list' and button == 'circle' and self.row in self.flags.get(
+                'grey_rows', ()):
+            self.screen = 'caution'                         # "Requirement unmet" (22 Oct live)
+        elif s == 'caution' and button == 'cross':
+            self.screen = 'weapon_list'
         elif s == 'weapon_list' and button == 'circle':
-            self.weapon = self.weapons[self.row]
+            self.weapon = self.menu()[self.row]
             foe = next(u for u in self.units if u['raw_menu_group_byte'] == 12)
             self.cursor, self.screen = [foe['tile_x'], foe['tile_y']], 'target_select'
         elif s == 'weapon_list' and button == 'cross':
@@ -101,11 +114,27 @@ class SimGame:
             self.screen, self.combat_reads = 'combat', 0
         elif s == 'result' and button == 'circle' and not self.flags.get('dismiss_never'):
             assert self.acting is not None
-            self.acting.update(counter_value=0, counted_as_unmoved=False)
-            self.screen = 'map'
-
+            if self.flags.get('post_attack_move'):       # Hit and Away: Move / Standby menu
+                self.screen, self.entry = 'ha_menu', 0
+            else:
+                self.acting.update(counter_value=0, counted_as_unmoved=False)
+                self.screen = 'map'
+        elif s == 'ha_menu' and step:
+            self.entry = max(0, min(1, self.entry + step[1]))
+        elif s == 'ha_menu' and button == 'circle':
+            assert self.acting is not None
+            if self.entry == 0:
+                self.screen = 'post_move'                # Move chosen: the range is shown
+            elif not self.flags.get('standby_ignored'):
+                self.acting.update(counter_value=0, counted_as_unmoved=False)
+                self.screen = 'map'
+                self.linger = self.flags.get('overlay_lingers', 0)    # stale range in memory
+        elif s == 'post_move' and button == 'cross':
+            self.screen = 'ha_menu'
     async def goto(self, tile):
         self.log.append(f'goto{tuple(tile)}')
+        if self.screen in ('weapon_list', 'caution'):    # the cursor cannot walk in a menu
+            return {'reached': False, 'cursor': {'x': self.cursor[0], 'y': self.cursor[1]}}
         if self.flags.get('goto_fails'):
             return {'reached': False, 'cursor': {'x': self.cursor[0], 'y': self.cursor[1]}}
         self.cursor = list(tile)
@@ -116,8 +145,13 @@ class SimGame:
             self.combat_reads += 1
             if self.combat_reads >= 2:
                 self.screen = 'result'
+                if self.flags.get('ha_direct'):          # Hit and Away: the menu is up at once
+                    self.screen, self.entry = 'ha_menu', 0
         reachable = []
-        if self.screen == 'move_range' and self.acting and not self.flags.get('range_stale'):
+        if self.linger > 0:
+            self.linger -= 1
+        if (self.screen in ('move_range', 'post_move') or self.linger > 0) and self.acting and (
+                not self.flags.get('range_stale')):
             ax, ay = self.acting['tile_x'], self.acting['tile_y']
             reachable = [[ax + dx, ay + dy, abs(dx) + abs(dy)]
                          for dx in range(-3, 4) for dy in range(-3, 4)
@@ -128,19 +162,25 @@ class SimGame:
                 'units': copy.deepcopy(self.units), 'reachable': reachable}
 
     async def read_weapons(self, unit_object):
-        return {'object': unit_object, 'weapons': copy.deepcopy(self.weapons)}
+        skills = [{'id': 20 if self.flags.get('ha_skill') else 12, 'level': 1}]
+        return {'object': unit_object, 'weapons': copy.deepcopy(self.weapons),
+                'pilot_skills': skills}
 
     async def hit(self):
         if self.screen in ('target_select', 'forecast'):
             u = self.unit_at(*self.cursor)
             if u and u['raw_menu_group_byte'] == 12:
+                if self.flags.get('hit_slow', 0) > 0:     # forecast not computed yet
+                    self.flags['hit_slow'] -= 1
+                    return {'state': 'unknown', 'hit': None}
                 return {'state': 'hit', 'hit': 42}
             return {'state': 'no_target', 'hit': None}
         return {'state': 'unknown', 'hit': None}
 
     async def menu_row(self):
         if self.screen == 'weapon_list':
-            return self.row, len(self.weapons)
+            window = self.flags.get('menu_window')
+            return self.row, min(len(self.weapons), window) if window else len(self.weapons)
         return 0, 0
 
     async def sleep(self, seconds):
@@ -374,7 +414,7 @@ def test_commit_without_time_for_fire_stops_at_the_forecast_for_a_separate_call(
     sim = SimGame()
 
     def tight():
-        return 49.0 if sim.screen == 'forecast' else float('inf')
+        return act.FIRE_NEEDS - 1 if sim.screen == 'forecast' else float('inf')
     sim.time_left = tight
     result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
     assert result['ok'] is True and result['phase'] == 'forecast'
@@ -391,7 +431,8 @@ def test_the_deadline_stops_the_macro_before_an_input_it_could_not_finish():
 def test_duplicate_weapon_names_need_a_slot_and_the_slot_picks_the_row():
     sim = SimGame()
     sim.weapons.append({'slot': 4, 'name': 'BeamRifle', 'min_range': 1, 'max_range': 8,
-                        'max_ammo': 0, 'ammo': None, 'en_cost': 5, 'flags': {'p': True}})
+                        'max_ammo': 0, 'ammo': None, 'en_cost': 5, 'flags': {'p': True},
+                        'power': 3500})
     ambiguous = run(act.run_act(MOVE_ATTACK, sim, commit=True))
     assert ambiguous['ok'] is False and ambiguous['reason'] == 'ambiguous_weapon'
     assert ambiguous['facts']['slots'] == [3, 4] and sim.log == []
@@ -402,6 +443,77 @@ def test_duplicate_weapon_names_need_a_slot_and_the_slot_picks_the_row():
     wrong = instruction(move_to=[5, 7], attack={'weapon': 'Vulcan', 'slot': 3,
                                                 'target_object': 2000})
     assert run(act.run_act(wrong, SimGame(), commit=True))['reason'] == 'unknown_weapon'
+
+
+def test_the_menu_row_follows_power_order_not_the_memory_list():
+    # Force Impulse (22 Oct live): memory lists BeamSaber 2900 before HiEnergyBeamGun 2800, the
+    # menu shows them by power, so the memory index picked the wrong (refused) weapon.
+    sim = SimGame()
+    sim.weapons[1]['power'] = 4000                  # Grenade now sorts after BeamRifle
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and sim.weapon['name'] == 'BeamRifle'
+    plan = next(s for s in result['stages'] if s['stage'] == 'plan')
+    assert plan['facts']['row'] == 1 and sim.log.count('down') == 1
+
+
+def test_a_weapon_whose_power_ties_another_has_no_known_row():
+    sim = SimGame()
+    sim.weapons[1]['power'] = 3000                  # Grenade ties BeamRifle: order unverified
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['reason'] == 'menu_row_unknown' and sim.log == []
+    sim.weapons[1]['power'] = None
+    assert run(act.run_act(MOVE_ATTACK, sim, commit=True))['reason'] == 'weapon_power_unreadable'
+
+
+def _sf(name, slot, power, *, base=None, map_=False, condition=False, en=0, will=0):
+    return {'name': name, 'slot': slot, 'power': power, 'base_power': power - 200 if base is None
+            else base, 'en_cost': en, 'will': will,
+            'flags': {'p': True, 'map': map_, 'condition': condition}}
+
+
+# Strike Freedom (22 Oct live screen): CIWS 2000, Saber 3200, SuperDragoon (MAP) shown 3600 while
+# memory says 3700, HiEnergyBeamGun 3600, Calidus 4100, DragoonFullBurst 4600 (greyed, will 130);
+# Combo/Meteor weapons (record byte 26) are not shown.
+STRIKE_FREEDOM = [_sf('CIWS', 0, 2000), _sf('Saber', 1, 3200, en=5),
+                  _sf('SuperDragoon', 2, 3700, map_=True, will=140), _sf('HiEnergy', 3, 3600),
+                  _sf('Calidus', 4, 4100, en=35), _sf('FullBurst', 5, 4600, will=130, en=50),
+                  _sf('Combo', 6, 5100, condition=True, will=130)]
+
+
+def test_menu_row_knows_rows_only_where_the_menu_order_is_certain():
+    row = {w['name']: act.menu_row(STRIKE_FREEDOM, w, 230) for w in STRIKE_FREEDOM}
+    # The MAP weapon's shown power lies between base and upgraded power, so HiEnergy (3600) may
+    # sort either side of it; will does not hide weapons (shown greyed), byte 26 may.
+    assert row == {'CIWS': 0, 'Saber': 1, 'SuperDragoon': None, 'HiEnergy': None,
+                   'Calidus': 4, 'FullBurst': 5, 'Combo': None}
+    # EN below a cost may hide that weapon (unverified), so every stronger row is unknown.
+    assert act.menu_row(STRIKE_FREEDOM, STRIKE_FREEDOM[4], 4) is None
+    assert act.menu_row(STRIKE_FREEDOM, STRIKE_FREEDOM[0], 4) == 0
+
+
+def test_a_power_zero_placeholder_is_not_a_menu_row():
+    # VF-25 (22 Oct live): five memory weapons including "-" (power 0, will 110), four menu rows.
+    rows = [_sf('25mmBeamCannon', 0, 2500, base=2500), _sf('SniperRifle', 2, 2600, base=2600),
+            _sf('-', 4, 0, base=0, will=110), _sf('BeamCannon', 5, 3700, base=3700, en=30)]
+    assert [act.menu_row(rows, w, 57) for w in rows] == [0, 1, None, 2]
+    upgraded = [dict(w, power=w['power'] + 200) for w in rows]    # upgrades add to "-" too
+    assert [act.menu_row(upgraded, w, 57) for w in upgraded] == [0, 1, None, 2]
+
+
+def test_the_menu_row_is_checked_again_with_the_en_left_after_the_move():
+    # Moving costs EN; a weaker weapon the unit can no longer afford may then be hidden.
+    sim = SimGame()
+    sim.weapons[1]['en_cost'] = 99                  # Grenade: affordable now (EN 100), not after
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['stage'] == 'attack_menu'
+    assert result['reason'] == 'menu_row_unknown' and sim.screen == 'unit_menu'
+
+
+def test_a_map_weapon_is_refused_before_any_input():
+    sim = SimGame()
+    sim.weapons[2]['flags']['map'] = True
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['reason'] == 'map_weapon' and sim.log == []
 
 
 def test_a_weapon_without_ammo_or_en_cost_is_fired_and_confirmed_by_the_result_dialog():
@@ -445,3 +557,110 @@ def test_weapon_list_that_opens_on_another_row_is_walked_from_that_row():
     result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
     assert result['ok'] is True and sim.weapon['name'] == 'BeamRifle'
     assert sim.log.count('down') == 1 and sim.log.count('up') == 0
+
+
+def test_hit_and_away_menu_is_answered_with_standby():
+    sim = SimGame(post_attack_move=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    last = result['stages'][-1]
+    assert last['stage'] == 'result' and last['facts']['post_attack_standby'] is True
+    assert sim.log[-3:] == ['cross', 'down', 'circle']
+    assert sim.screen == 'map' and sim.units[0]['counted_as_unmoved'] is False
+
+
+def test_stale_move_range_after_standby_does_not_fail_the_act():
+    sim = SimGame(post_attack_move=True, overlay_lingers=3)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is True and result['stages'][-1]['facts']['post_attack_standby'] is True
+
+
+def test_post_attack_standby_that_does_not_take_is_reported_not_looped():
+    sim = SimGame(post_attack_move=True, standby_ignored=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is False and result['stage'] == 'result'
+    assert result['reason'] in ('post_attack_move_not_closed', 'result_not_dismissed')
+    assert sim.log.count('cross') <= 1
+
+
+def test_real_arios_post_attack_state_is_recognised_as_the_move_prompt():
+    import json
+    from pathlib import Path
+    fixture = Path(__file__).parents[2] / 'local/m9-arios-postattack-state.json'
+    if not fixture.exists():
+        pytest.skip('retained local capture not present')
+    state = json.loads(fixture.read_text(encoding='utf-8'))
+    unit = next(u for u in state['units'] if u['object'] == 149304328)
+    assert act._post_attack_move(state, unit) is True
+    idle = dict(state, reachable=[])
+    idle['map'] = {'cost_rows': ['.' * 24] * 34}
+    assert act._post_attack_move(idle, unit) is False
+
+
+def test_hit_chance_that_is_not_ready_yet_is_polled_not_failed():
+    sim = SimGame(hit_slow=2)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
+    assert result['ok'] is True and result['forecast']['hit'] == 42
+
+
+def test_hit_chance_that_never_becomes_readable_still_backs_out():
+    sim = SimGame(hit_slow=50)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
+    assert result['ok'] is False and result['stage'] == 'target'
+    assert result['reason'] == 'target_not_hittable' and sim.screen == 'unit_menu'
+
+
+def _many_weapons(sim):
+    for i in range(3, 9):
+        sim.weapons.append({'slot': i + 1, 'name': f'Extra{i}', 'min_range': 1, 'max_range': 9,
+                            'max_ammo': 0, 'ammo': None, 'en_cost': 0, 'flags': {'p': True},
+                            'power': 4000 + i})
+    return sim
+
+
+def test_weapon_list_longer_than_the_menu_window_still_opens_for_a_visible_row():
+    sim = _many_weapons(SimGame(menu_window=6))          # 9 weapons, 6 rows on screen
+    request_ = instruction(move_to=[5, 7], attack={'weapon': 'BeamRifle',
+                                                   'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=False))
+    assert result['ok'] is True and result['phase'] == 'forecast'
+
+
+def test_menu_with_too_few_rows_for_the_chosen_row_is_refused():
+    sim = _many_weapons(SimGame(menu_window=2))          # BeamRifle is row 2: needs 3+ rows
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=False))
+    assert result['ok'] is False and result['reason'] == 'weapon_list_not_open'
+
+
+def test_menu_with_more_rows_than_the_weapon_list_is_refused():
+    sim = SimGame()
+    original = sim.menu_row
+
+    async def too_many():
+        row = await original()
+        return (row[0], row[1] + 3) if row[1] else row
+    sim.menu_row = too_many
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=False))
+    assert result['ok'] is False and result['reason'] == 'weapon_list_not_open'
+
+
+def test_unit_with_the_hit_and_away_skill_is_answered_with_down_and_circle():
+    sim = SimGame(post_attack_move=True, ha_direct=True, ha_skill=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    assert result['stages'][-1]['facts']['post_attack_standby'] is True
+    assert sim.log[-2:] == ['down', 'circle'] and 'cross' not in sim.log
+    assert sim.screen == 'map' and sim.units[0]['counted_as_unmoved'] is False
+
+
+def test_unit_without_the_skill_never_gets_the_blind_down_press():
+    sim = SimGame()
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    run(act.run_act(request_, sim, commit=True))
+    assert sim.log.count('down') == 3                    # attack entry + two weapon rows

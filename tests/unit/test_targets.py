@@ -103,7 +103,13 @@ def test_hover_hit_decoding():
                                                                     "hit": None}
     # idle in menus the fields read 24 (or anything unpaired): not a forecast
     assert decode_hover_hit(struct.pack("<ii", 24, 24))["state"] == "hit"
-    assert decode_hover_hit(struct.pack("<ii", 42, 61))["state"] == "unknown"
+    assert decode_hover_hit(struct.pack("<ii", 42, 61)) == {"state": "unknown", "hit": None,
+                                                            "raw": [42, 61]}
     assert decode_hover_hit(struct.pack("<ii", 500, 500))["state"] == "unknown"
+    # 22 Oct live (Shenlong Vulcan): the uncapped chance can exceed 100; the screen shows 100.
+    assert decode_hover_hit(struct.pack("<ii", 105, 105)) == {"state": "hit", "hit": 100,
+                                                              "raw": 105}
+    assert decode_hover_hit(struct.pack("<ii", 100, 100)) == {"state": "hit", "hit": 100}
+    assert decode_hover_hit(struct.pack("<ii", 201, 201))["state"] == "unknown"
     with pytest.raises(ValueError):
         decode_hover_hit(b"\0" * 4)

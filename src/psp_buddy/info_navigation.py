@@ -15,7 +15,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from . import act as act_macro
-from . import battle_state, plan_act
+from . import battle_state, plan_act, turn
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
@@ -32,10 +32,10 @@ MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
 MAX_PROBES = 60
-MAX_ACTS = 8
-MAX_ACT_PRESSES = 150               # presses sent by `act` per trial (taps and cursor walks)
+MAX_ACTS = 40
+MAX_ACT_PRESSES = 1000              # presses sent by `act` per trial (taps and cursor walks)
 ACT_PRESS_RESERVE = 60              # a run starts only with at least this many presses left
-ACT_SECONDS = 95                    # cooperative budget; the helper cancels hard at 120 s, which
+ACT_SECONDS = 105                   # cooperative budget; the helper cancels hard at 120 s, which
                                     # would leave the emulator paused, so the macro never gets there
 MAX_GOTO_STEPS = 80
 MAX_GOTO_JUMP = 40
@@ -138,6 +138,8 @@ class InfoNavigation:
         self._act_presses = 0
         self._act_deadline = 0.0
         self._act_pending: dict[str, object] | None = None
+        self._turn = turn.TurnLog()
+        self._turn_state: Mapping[str, object] = {}
         self._map_size = map_size
         self._poll = poll_seconds
         self._goto_presses = 0
@@ -305,7 +307,7 @@ class InfoNavigation:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
         if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "targets",
-                             "hit", "goto", "probe_move", "act", "plan_act"):
+                             "hit", "goto", "probe_move", "act", "plan_act", "turn_next"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -323,6 +325,12 @@ class InfoNavigation:
                     or not RAM_START <= unit_object < RAM_END or self._read_weapons is None
                     or self._weapon_reads >= MAX_WEAPON_READS):
                 raise ValueError("weapon read needs a sequence, a unit object, a reader and budget")
+            return "", None
+        if operation == "turn_next":
+            # Pure memory read: next ready ally of this turn (bookkeeping in memory only).
+            if keys != {"sequence"} or self._read_state is None or (
+                    self._state_reads >= MAX_STATE_READS):
+                raise ValueError("turn_next needs only a sequence, a reader and budget")
             return "", None
         if operation == "hit":
             # Pure memory read of the hover hit chance (valid only in target select).
@@ -530,7 +538,21 @@ class InfoNavigation:
             damage_log=self._evidence / "damage-log.jsonl")
         self._act_pending = None
         self._stale = {p.name for p in self._root.iterdir()} if self._root.is_dir() else set()
-        return outcome
+        self._turn.record(unit_object, outcome)
+        error = self._write_turn_report()
+        return {**outcome, "report_error": error} if error else outcome
+
+    def _write_turn_report(self) -> str | None:
+        """Rewrite turn-report.json; a write error is returned, never raised (the action may
+        already have happened, and an exception would disable the helper mid-turn)."""
+        try:
+            self._evidence.mkdir(parents=True, exist_ok=True)
+            data = turn.report(self._turn, self._turn_state)
+            (self._evidence / "turn-report.json").write_text(
+                json.dumps(data, allow_nan=False, indent=1), encoding="utf-8")
+        except (OSError, TypeError, ValueError) as exc:
+            return repr(exc)
+        return None
 
     @staticmethod
     def _act_key(arguments: Mapping[str, object]) -> dict[str, object]:
@@ -795,6 +817,26 @@ class InfoNavigation:
                     raise
                 self._log({"sequence": sequence, "operation": "state",
                            "state_read": self._state_reads})
+                return answer
+            if operation == "turn_next":
+                assert self._read_state is not None
+                self._state_reads += 1
+                try:
+                    state = dict(await self._read_state(self._state_reads))
+                except NavigationRefused:
+                    self._next -= 1
+                    self._state_reads -= 1
+                    raise
+                self._turn_state = state
+                chosen = turn.next_unit(state, self._turn)
+                answer = {**chosen, "skipped": {str(k): v for k, v in chosen["skipped"].items()},
+                          "sequence": sequence}
+                error = self._write_turn_report()
+                if error:
+                    answer["report_error"] = error
+                self._log({"sequence": sequence, "operation": "turn_next",
+                           "unit_object": answer["unit_object"], "done": answer["done"],
+                           "stopped": answer["stopped"]})
                 return answer
             if operation == "observe":
                 assert self._observe_stage is not None

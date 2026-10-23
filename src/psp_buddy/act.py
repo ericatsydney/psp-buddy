@@ -7,19 +7,25 @@ macro and reports the stage and reason; menus opened since the last confirmed st
 with Cross (harmless on a menu, never used after a confirmed Move).
 """
 
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from . import battle_state, targets
 
 ALLY_GROUP = 0
+# Debug only: hold a failed stage on screen this long before backing out (to take a screenshot).
+DEBUG_HOLD_SECONDS = float(os.environ.get("PSP_ACT_HOLD", "0"))
+HIT_AND_AWAY_SKILL = 20      # Arios and Baldios pilots (22 Oct live: Move/Standby after attack)
 RESULT_PRESSES = 6
 FIRE_POLLS = 16
 READ_RETRIES = 6
 ANIMATION_SECONDS = 8.0
-FIRE_NEEDS = 50.0            # seconds a Start + result needs; less left means stop at the forecast
+FIRE_NEEDS = 40.0            # seconds Start + result need (about 25 live); less: stop at forecast
 GUARD_SECONDS = 1.0
 MOVE_POLLS = 12
+HIT_POLLS = 5                # reads waiting for a forecast that is not computed yet
+STANDBY_POLLS = 6            # reads waiting for the unit to show as acted after Standby
 WATCHED = ("hp", "en", "tile_x", "tile_y", "counter_value", "counted_as_unmoved")
 
 
@@ -56,6 +62,59 @@ class _Stop(Exception):
                  retreat: int = 0) -> None:
         super().__init__(reason)
         self.stage, self.reason, self.facts, self.retreat = stage, reason, facts or {}, retreat
+
+
+def _shown_power(weapon: Mapping[str, Any]) -> tuple[int, int]:
+    """Lowest and highest power the attack menu may show for a weapon.
+
+    MAP weapons get a smaller upgrade bonus (22 Oct live: SuperDragoon is 3700 in memory, 3600
+    on screen), so only base..power is known for them.
+    """
+    power: int = weapon["power"]
+    if (weapon.get("flags") or {}).get("map"):
+        base = weapon.get("base_power")
+        return (base if type(base) is int else 0), power
+    return power, power
+
+
+def _maybe_hidden(weapon: Mapping[str, Any], en: int) -> bool:
+    """The menu hides weapons with a special condition (record byte 26, e.g. Combo/Meteor) and
+    possibly ones costing more EN than the unit has (unverified). Will does not hide: weapons
+    above the pilot's will are shown greyed (22 Oct live: Excalibur 110, SuperDragoon 140)."""
+    return bool((weapon.get("flags") or {}).get("condition")) or (weapon.get("en_cost") or 0) > en
+
+
+def _placeholder(weapon: Mapping[str, Any]) -> bool:
+    """A base-power-0 record ("-") is not listed (22 Oct live: VF-25, 5 weapons, 4 rows); upgrades
+    still add to its effective power, so the base decides."""
+    base = weapon.get("base_power", weapon["power"])
+    return not base
+
+
+def menu_row(weapons: Sequence[Mapping[str, Any]], chosen: Mapping[str, Any],
+             en: int) -> int | None:
+    """The chosen weapon's attack-menu row, or None when it is not certain.
+
+    The menu lists weapons by shown power, lowest first (22 Oct live: Force Impulse's memory list
+    CIWS 1800, BeamSaber 2900, HiEnergyBeamGun 2800 is shown as 1800, 2800, 2900). A row is only
+    known when no other weapon's shown power can equal or straddle the chosen one's (the order of
+    equal powers is unverified) and no weaker weapon may be hidden.
+    """
+    low, high = _shown_power(chosen)
+    if low != high or _maybe_hidden(chosen, en) or _placeholder(chosen):
+        return None
+    row = 0
+    for weapon in weapons:
+        if weapon["slot"] == chosen["slot"] or _placeholder(weapon):
+            continue
+        a, b = _shown_power(weapon)
+        if a <= high and low <= b:
+            return None
+        if b < low:
+            if _maybe_hidden(weapon, en):
+                return None
+            row += 1
+    return row
 
 
 def centered(tile: Sequence[int], reachable: Sequence[Sequence[int]]) -> bool:
@@ -119,9 +178,11 @@ class _Run:
         attack = request.get("attack")
         self.attack: Mapping[str, object] | None = attack if isinstance(attack, Mapping) else None
         self.state0: Mapping[str, object] = {}
+        self.hit_and_away = False
         self.weapons: list[dict[str, object]] = []
         self.target_tile: list[int] = []
-        self.row = 0
+        self.row = 0                    # attack-menu row (power order)
+        self.index = 0                  # the same weapon's index in the memory list
         unit_object = request["unit_object"]
         if type(unit_object) is not int:
             raise ValueError("unit_object must be an integer")
@@ -183,6 +244,9 @@ class _Run:
             if not isinstance(rows, list):
                 raise _Stop("plan", "weapons_unreadable")
             self.weapons = [dict(w) for w in rows]
+            skills = weapons.get("pilot_skills")
+            self.hit_and_away = isinstance(skills, list) and any(
+                isinstance(k, Mapping) and k.get("id") == HIT_AND_AWAY_SKILL for k in skills)
             planned = dict(unit)
             if self.move_to is not None:
                 planned["tile_x"], planned["tile_y"] = self.move_to
@@ -202,8 +266,17 @@ class _Run:
             if len(rows) > 1:
                 raise _Stop("plan", "ambiguous_weapon",
                             {"slots": [self.weapons[i].get("slot") for i in rows]})
-            self.row = rows[0]
-            entry = answer["weapons"][self.row]  # type: ignore[index]
+            chosen = self.weapons[rows[0]]
+            if any(type(w.get("power")) is not int for w in self.weapons):
+                raise _Stop("plan", "weapon_power_unreadable")
+            flags = chosen.get("flags")
+            if isinstance(flags, Mapping) and flags.get("map"):
+                raise _Stop("plan", "map_weapon")      # area placement, not a target attack
+            row = menu_row(self.weapons, chosen, unit["en"])  # type: ignore[arg-type]
+            if row is None:
+                raise _Stop("plan", "menu_row_unknown")
+            self.index, self.row = rows[0], row
+            entry = answer["weapons"][self.index]  # type: ignore[index]
             if not entry["usable"]:
                 raise _Stop("plan", "weapon_unusable", {"why": entry["unusable_reason"]})
             hit = [t for t in entry["targets"] if t["object"] == self.attack.get("target_object")]
@@ -279,8 +352,18 @@ class _Run:
         await self.tap("circle")
         self.depth += 1
         await self.io.sleep(0.8)
+        if self.move_to is not None:
+            # The Move spent EN, and a weapon the unit can no longer afford may be hidden.
+            moved = _find(_units(await self.steady(self.io.state)), self.unit_object)
+            en = moved.get("en") if moved is not None else None
+            if type(en) is not int or menu_row(self.weapons, self.weapons[self.index],
+                                               en) != self.row:
+                raise _Stop("attack_menu", "menu_row_unknown", {"en": en},
+                            retreat=self.depth)
         menu = await self.io.menu_row()
-        if menu is None or menu[1] != len(self.weapons):
+        # The game hides weapons needing more will/EN (22 Oct live), so the menu may be shorter
+        # than the list; the planner only picks rows that are certain, so the row must still fit.
+        if menu is None or not self.row < menu[1] <= len(self.weapons):
             raise _Stop("attack_menu", "weapon_list_not_open", {"menu": menu})
         self.record("attack_menu", rows=menu[1], row=menu[0])
 
@@ -308,6 +391,18 @@ class _Run:
         await self.io.sleep(0.8)
         self.record("weapon", row=row, name=self.attack and self.attack.get("weapon"))
 
+    async def _hit_when_ready(self) -> Mapping[str, object]:
+        """Hover hit chance; "unknown" right after the cursor lands means not computed yet (22 Oct
+        live: Shenlong Vulcan), so poll briefly. "no_target" and real values are final."""
+        hit = await self.io.hit()
+        for _ in range(HIT_POLLS):
+            if hit.get("state") != "unknown":
+                break
+            self.guard()
+            await self.io.sleep(0.6)
+            hit = await self.io.hit()
+        return hit
+
     async def target(self) -> None:
         self.current = "target"
         self.guard()
@@ -315,7 +410,7 @@ class _Run:
         if not walk.get("reached"):
             raise _Stop("target", "cursor_did_not_reach_tile", {"walk": dict(walk)},
                         retreat=self.depth)
-        hit = await self.io.hit()
+        hit = await self._hit_when_ready()
         if hit.get("state") != "hit":
             raise _Stop("target", "target_not_hittable", {"hit": dict(hit)}, retreat=self.depth)
         self.record("target", tile=self.target_tile, hit=hit.get("hit"))
@@ -326,7 +421,7 @@ class _Run:
         await self.tap("circle")
         self.depth += 1
         await self.io.sleep(1.0)
-        hit = await self.io.hit()
+        hit = await self._hit_when_ready()
         if hit.get("state") != "hit":
             raise _Stop("forecast", "forecast_not_shown", {"hit": dict(hit)}, retreat=self.depth)
         facts: dict[str, object] = {"hit": hit.get("hit"), "tile": self.target_tile}
@@ -348,7 +443,7 @@ class _Run:
         rows = weapons.get("weapons")
         if unit is None or not isinstance(rows, list):
             raise _Stop("fire", "unit_not_readable")
-        weapon = rows[self.row]
+        weapon = rows[self.index]
         costs = bool(weapon.get("max_ammo")) or bool(weapon.get("en_cost"))
         await self.tap("start")
         spent = False
@@ -359,7 +454,7 @@ class _Run:
             state = await self.steady(self.io.state)
             now = _find(_units(state), self.unit_object)
             again = await self.steady(lambda: self.io.read_weapons(self.unit_object))
-            new = again["weapons"][self.row]
+            new = again["weapons"][self.index]
             if (now is not None and isinstance(now.get("en"), int)
                     and now["en"] < unit["en"]) or (  # type: ignore[operator]
                     isinstance(new.get("ammo"), int) and isinstance(weapon.get("ammo"), int)
@@ -381,17 +476,65 @@ class _Run:
         self.guard()
         await self.io.sleep(2.0)
         presses = 0
+        standby = False
+        polls = 0
+        trace: list[dict[str, object]] = []     # diagnostics: what memory shows after the attack
         while True:
-            unit = _find(_units(await self.steady(self.io.state)), self.unit_object)
-            if unit is not None and not unit.get("counted_as_unmoved") and (
-                    unit.get("counter_value") == 0):
+            state = await self.steady(self.io.state)
+            unit = _find(_units(state), self.unit_object)
+            try:
+                menu = await self.io.menu_row()
+            except ActIOError:
+                menu = None
+            trace.append({"menu": menu, "counter": unit and unit.get("counter_value"),
+                          "unmoved": unit and unit.get("counted_as_unmoved"),
+                          "range": len(_reachable(state)), "presses": presses})
+            acted = unit is not None and not unit.get("counted_as_unmoved") and (
+                unit.get("counter_value") == 0)
+            if acted and (standby or not _post_attack_move(state, unit)):  # type: ignore[arg-type]
+                # After Standby the move range can stay in memory for a moment (22 Oct live).
                 break
+            if (self.hit_and_away and not standby and unit is not None
+                    and unit.get("counted_as_unmoved") and not _post_attack_move(state, unit)):
+                # The Move / Standby menu is already up with Move highlighted: choose Standby.
+                await self.tap("down")
+                await self.io.sleep(0.5)
+                await self.tap("circle")
+                standby = True
+                await self.io.sleep(1.5)
+                continue
+            if standby and polls < STANDBY_POLLS:
+                polls += 1
+                await self.io.sleep(1.0)
+                continue
+            if unit is not None and _post_attack_move(state, unit):
+                # Units with Hit and Away get a "Move / Standby" menu after the attack (22 Oct
+                # live: Arios Gundam). Dismissing presses chose Move and showed its range; the MVP
+                # stands still: Cross returns to the menu, Down + Circle choose Standby.
+                if standby:
+                    raise _Stop("result", "post_attack_move_not_closed",
+                                {"presses": presses, "trace": trace[-8:]})
+                await self.tap("cross")
+                await self.io.sleep(1.0)
+                await self.tap("down")
+                await self.io.sleep(0.5)
+                await self.tap("circle")
+                standby = True
+                await self.io.sleep(1.5)
+                continue
             if presses >= RESULT_PRESSES:
-                raise _Stop("result", "result_not_dismissed", {"presses": presses})
+                raise _Stop("result", "result_not_dismissed",
+                            {"presses": presses, "trace": trace[-8:]})
             await self.tap("circle")
             presses += 1
             await self.io.sleep(1.5)
-        self.record("result", presses=presses)
+        self.record("result", presses=presses, post_attack_standby=standby, trace=trace[-8:])
+
+
+def _post_attack_move(state: Mapping[str, object], unit: Mapping[str, object]) -> bool:
+    """A Move range centred on the acting unit is displayed (the post-attack move prompt)."""
+    reachable = _reachable(state)
+    return bool(reachable) and centered(_tile(unit), reachable)
 
 
 def _alive(unit: Mapping[str, object]) -> bool:
@@ -438,9 +581,12 @@ async def run_act(request: Mapping[str, object], io: ActIO, *, commit: bool = Fa
                 "facts": {}, "stages": run.stages, "needs_screenshot": True}
     except _Stop as stop:
         if stop.retreat:
+            if DEBUG_HOLD_SECONDS:
+                await io.sleep(DEBUG_HOLD_SECONDS)
             await run.retreat(stop.retreat)
         return {"ok": False, "stage": stop.stage, "reason": stop.reason, "facts": stop.facts,
-                "stages": run.stages, "needs_screenshot": stop.stage != "plan"}
+                "stages": run.stages, "needs_screenshot": stop.stage != "plan",
+                **({"debug_hold_seconds": DEBUG_HOLD_SECONDS} if DEBUG_HOLD_SECONDS else {})}
 
 
 async def _finish(run: _Run, phase: str, io: ActIO) -> dict[str, object]:

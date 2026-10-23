@@ -19,10 +19,15 @@ from .models import Policy
 from .tactics import plan_attack
 
 MIN_HIT = 1
+MAX_REPLANS = 2          # extra plans after the game refuses a weapon (greyed, out of reach)
+REPLAN_STAGES = ("weapon", "target", "forecast")
 BACK_OUT_PAUSE = 0.6
+STANDBY_POLLS = 4
+STANDBY_NEEDS = 10.0     # seconds two presses and the confirming reads take
 
 
 OVERLAY_NEEDS = act.FIRE_NEEDS + 20.0     # seconds left to open the Move range and still fire
+REPLAN_NEEDS = act.FIRE_NEEDS + 22.0      # a new plan reaches the forecast in about 22 s
 
 
 async def _back_out(io: act.ActIO, presses: int) -> bool:
@@ -34,6 +39,32 @@ async def _back_out(io: act.ActIO, presses: int) -> bool:
     except act.ActIOError:
         return False
     return True
+
+
+async def _standby(io: act.ActIO, unit_object: int) -> bool:
+    """MVP rule (user, 22 Oct): a moved unit that cannot finish its attack waits.
+
+    After the back-out the post-move menu is up with Attack highlighted and Standby below it
+    (22 Oct live screen). Memory confirms the unit is done; otherwise Cross closes whatever opened
+    and False is reported (never raised).
+    """
+    if io.time_left() < STANDBY_NEEDS:
+        return False                   # the helper's hard cancel must never hit an open menu
+    try:
+        await io.press("down", 2)
+        await io.sleep(0.3)
+        await io.press("circle", 2)
+        for _ in range(STANDBY_POLLS):
+            await io.sleep(0.6)
+            state: Mapping[str, Any] = await io.state()
+            unit = next((u for u in state.get("units", []) if u.get("object") == unit_object),
+                        None)
+            if unit is not None and unit.get("counted_as_unmoved") is False:
+                return True
+        await _back_out(io, 1)
+    except act.ActIOError:
+        pass
+    return False
 
 
 def forecast_gate(instruction: Mapping[str, Any], outcome: Mapping[str, Any],
@@ -125,18 +156,39 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                         damage_log: Path | None) -> dict[str, Any]:
     state = await io.state()
     weapons = await io.read_weapons(unit_object)
-    plan = plan_attack(state, weapons, policy, unit_object, bosses=bosses, hits=hits)
-    if plan.get("reason") == "no_target" and io.time_left() >= OVERLAY_NEEDS:
-        plan = plan_attack(await _open_move_range(io, unit_object), weapons, policy,
-                           unit_object, bosses=bosses, hits=hits)
-    if "handover" in plan:
-        return {"ok": False, "phase": "handover", "reason": plan["reason"]}
-    instruction: dict[str, Any] = plan["act"]       # type: ignore[assignment]
+    excluded: list[int] = []
+    while True:
+        plan = plan_attack(state, weapons, policy, unit_object, bosses=bosses, hits=hits,
+                           exclude=excluded)
+        if plan.get("reason") == "no_target" and io.time_left() >= OVERLAY_NEEDS:
+            plan = plan_attack(await _open_move_range(io, unit_object), weapons, policy,
+                               unit_object, bosses=bosses, hits=hits, exclude=excluded)
+        if "handover" in plan:
+            return {"ok": False, "phase": "handover", "reason": plan["reason"],
+                    **({"excluded": excluded} if excluded else {})}
+        instruction: dict[str, Any] = plan["act"]       # type: ignore[assignment]
+        moved = bool(instruction.get("move_to"))
+        first = await act.run_act(instruction, io, commit=False)
+        failed_at = first.get("stage")
+        # The game can refuse a weapon the data allows (22 Oct live: greyed, no enemy in reach).
+        # Before any Move the macro backed out cleanly, so plan again without that weapon.
+        if (not first.get("ok") and not moved and failed_at in REPLAN_STAGES
+                and len(excluded) < MAX_REPLANS and io.time_left() >= REPLAN_NEEDS):
+            excluded.append(instruction["attack"]["slot"])
+            continue
+        break
     expect: dict[str, Any] = plan["expect"]         # type: ignore[assignment]
-    moved = bool(instruction.get("move_to"))
-    first = await act.run_act(instruction, io, commit=False)
+    extra: dict[str, Any] = {"excluded": excluded} if excluded else {}
     if not first.get("ok"):
-        return {"ok": False, "phase": "failed", "plan": plan, "outcome": first}
+        failed: dict[str, Any] = {"ok": False, "phase": "failed", "plan": plan, "outcome": first,
+                                  "moved": moved, **extra}
+        # After a confirmed Move, a weapon/target/forecast failure backs out to the post-move menu
+        # (other stages leave the screen unknown, so nothing more is pressed there).
+        stages: list[Mapping[str, Any]] = first.get("stages", [])  # type: ignore[assignment]
+        if (moved and failed_at in REPLAN_STAGES
+                and any(s.get("stage") == "move" for s in stages)):
+            failed["standby"] = await _standby(io, unit_object)
+        return failed
     # Menus open at the forecast: select, [attack menu], weapon list and forecast (a Move closes
     # the select level). A Move cannot be undone: the unit stays on the new tile.
     open_menus = 3 if moved else 4
@@ -145,14 +197,18 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
         reason = "no_time_to_fire"
     if reason is not None:
         closed = await _back_out(io, open_menus)
-        return {"ok": False, "phase": "declined", "reason": reason, "plan": plan,
-                "forecast": first.get("forecast"), "moved": moved, "back_out_failed": not closed}
+        declined: dict[str, Any] = {"ok": False, "phase": "declined", "reason": reason,
+                                    "plan": plan, "forecast": first.get("forecast"),
+                                    "moved": moved, "back_out_failed": not closed, **extra}
+        if moved and closed:
+            declined["standby"] = await _standby(io, unit_object)
+        return declined
     fired = await act.run_act(instruction, io, phase="fire")
     if not fired.get("ok"):
         return {"ok": False, "phase": "failed", "plan": plan, "outcome": fired, "moved": moved}
     forecast: dict[str, Any] = first["forecast"]     # type: ignore[assignment]
     answer: dict[str, Any] = {"ok": True, "phase": "fired", "plan": plan, "forecast": forecast,
-                              "outcome": fired}
+                              "outcome": fired, "moved": moved, **extra}
     if damage_log is not None:
         # The attack already happened: a logging problem is reported next to the result.
         try:

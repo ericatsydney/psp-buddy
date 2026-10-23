@@ -94,8 +94,12 @@ def decode_weapon_record(record: bytes, slot: int) -> dict[str, object]:
         "en_cost": record[19],
         "will": record[20],
         "terrain": "".join(TERRAIN_RANKS[rank] for rank in terrain),   # air, land, sea, space
+        # Candidates from one RAM dump (22 Oct, 86 records): bytes 27-31 are non-zero only for the
+        # two MAP weapons (SuperDragoon, RollingBuster-R; their area); byte 26 only for the three
+        # weapons Strike Freedom's menu hides (Combo-Assault, MeteorSword, MeteorFullBurst).
         "flags": {"p": bool(bits & 1), "beam": bool(bits & 2), "s": bool(bits & 8),
-                  "shooting": bool(kind & 0x40)},
+                  "shooting": bool(kind & 0x40), "map": any(record[27:32]),
+                  "condition": bool(record[26])},
     }
 
 

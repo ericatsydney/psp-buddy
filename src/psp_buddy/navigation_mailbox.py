@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "targets", "hit", "goto",
-              "probe_move", "act", "plan_act")
+              "probe_move", "act", "plan_act", "turn_next")
 
 
 def _deadline(operation: str) -> int:

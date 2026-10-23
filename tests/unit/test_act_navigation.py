@@ -182,14 +182,14 @@ def test_act_screenshot_is_single_use_and_the_count_is_bounded(owned, tmp_path):
         with pytest.raises(NavigationRefused):
             await service.execute('act', again)
         sim.screen = 'map'
-        for n in range(2, 12):
+        for n in range(2, 60):
             sim.units[0].update(counted_as_unmoved=True, moved=False, tile_x=5, tile_y=5)
             sim.cursor = [5, 5]
             try:
                 await service.execute('act', frame(sequence=n, **request(move_to=[6, 5])))
             except NavigationRefused:
                 break
-        assert n <= 9                                    # at most 8 acts per trial
+        assert 9 < n <= 41                               # at most 40 acts per trial
     asyncio.run(scenario())
 
 
@@ -258,7 +258,11 @@ def test_plan_act_is_a_known_mailbox_operation():
 
 
 def plan_sim():
-    sim = shifted_sim()
+    return plan_sim_with()
+
+
+def plan_sim_with(**flags):
+    sim = shifted_sim(**flags)
     for unit in sim.units:
         unit['max_hp'] = unit['hp']
     for weapon, power in zip(sim.weapons, (1000, 2000, 3000), strict=True):
@@ -321,3 +325,83 @@ def test_plan_act_min_hit_is_validated_and_applied(owned, tmp_path):
         assert answer['phase'] == 'declined' and answer['reason'] == 'hit_too_low'
     asyncio.run(scenario())
     assert 'start' not in adapter.sent
+
+
+def test_turn_next_is_a_known_mailbox_operation_and_budgets_fit_a_turn():
+    from psp_buddy import info_navigation
+    assert 'turn_next' in OPERATIONS
+    assert info_navigation.MAX_ACTS == 40 and info_navigation.MAX_ACT_PRESSES == 1000
+
+
+def test_a_simulated_turn_runs_to_done_and_writes_the_report(owned, tmp_path):
+    import json
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    report = tmp_path / 'evidence' / 'turn-report.json'
+
+    async def scenario():
+        first = await service.execute('turn_next', {'sequence': 1})
+        assert first['unit_object'] == BASE + 1000 and first['remaining'] == 2
+        assert first['done'] is False and first['stopped'] is None
+        fired = await service.execute('plan_act', frame(sequence=2, policy='', **request()))
+        assert fired['phase'] == 'fired'
+        assert json.loads(report.read_text(encoding='utf-8'))['fired'] == 1
+        second = await service.execute('turn_next', {'sequence': 3})
+        assert second['unit_object'] == BASE + 1001 and second['remaining'] == 1
+        skipped = await service.execute('plan_act', frame(sequence=4, policy='', **request(
+            unit_object=BASE + 1001)))
+        assert skipped['phase'] == 'handover' and skipped['reason'] == 'no_target'
+        last = await service.execute('turn_next', {'sequence': 5})
+        assert last['done'] is True and last['unit_object'] is None
+        assert last['skipped'] == {str(BASE + 1001): 'no_target'}
+    asyncio.run(scenario())
+    data = json.loads(report.read_text(encoding='utf-8'))
+    assert data['fired'] == 1 and data['done'] is True and data['stopped'] is None
+    assert data['skipped'] == {str(BASE + 1001): 'no_target'} and len(data['entries']) == 2
+    assert adapter.sent.count('start') == 1
+
+
+def test_a_failed_plan_act_stops_the_turn(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim_with(start_ignored=True))
+
+    async def scenario():
+        failed = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert failed['phase'] == 'failed'
+        nxt = await service.execute('turn_next', {'sequence': 2})
+        assert nxt['unit_object'] is None and nxt['done'] is False and nxt['stopped']
+    asyncio.run(scenario())
+
+
+def test_turn_next_takes_only_a_sequence_and_needs_no_screenshot(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):
+            await service.execute('turn_next', {'sequence': 1, 'object': 5})
+        with pytest.raises(NavigationRefused):
+            await service.execute('turn_next', {'sequence': 7})            # out of order
+        answer = await service.execute('turn_next', {'sequence': 1})
+        assert answer['sequence'] == 1
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_an_unwritable_turn_report_does_not_lose_the_plan_act_result(owned, tmp_path, monkeypatch):
+    # The attack already happened: a report write error is reported, never raised.
+    from pathlib import Path
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    real = Path.write_text
+
+    def locked(self, *args, **kwargs):
+        if self.name == 'turn-report.json':
+            raise PermissionError('locked')
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', locked)
+
+    async def scenario():
+        fired = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert fired['phase'] == 'fired' and 'locked' in fired['report_error']
+        nxt = await service.execute('turn_next', {'sequence': 2})
+        assert 'locked' in nxt['report_error']
+    asyncio.run(scenario())

@@ -13,7 +13,9 @@ fallback `hit% x effective power` (docs/research/2026-10-21-damage-model.md), fo
 The tile is the nearest reachable one (current tile first) from which the chosen weapon reaches the
 target; after a move only weapons with the P flag count, and the weapon must still be
 affordable after the move's EN cost (assumed 1 EN per move-cost point, from the 21 Oct live move).
-Boss identity is supplied by the caller.
+`exclude` lists weapon slots the caller found unusable in game (greyed out).
+Boss identity is supplied by the caller. Pilot will is not decoded: weapons needing more
+than `will` (default 100) are skipped (22 Oct live: Strike Freedom Super Dragoon needs 140).
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -23,6 +25,7 @@ from typing import Any
 from . import act, battle_state, targets
 from .models import Policy
 
+ASSUMED_WILL = 100       # pilot will is not decoded; weapons needing more are never chosen
 Tile = tuple[int, int]
 Candidate = tuple[dict[str, Any], int]      # weapon, number of tiles tried before it reached
 
@@ -66,6 +69,12 @@ def _reachable(state: Mapping[str, Any], here: Tile) -> dict[Tile, int]:
     return {(x, y): c for x, y, c in rows}
 
 
+def _certain_rows(rows: Sequence[Mapping[str, Any]], en: int) -> set[int]:
+    """Slots whose attack-menu row is known (`act.menu_row`); MAP weapons are never chosen."""
+    return {row["slot"] for row in rows if not (row.get("flags") or {}).get("map")
+            and act.menu_row(rows, row, en) is not None}
+
+
 def _distance(a: Tile, b: Tile) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
@@ -83,7 +92,7 @@ def _rule_and_pick(options: Sequence[dict[str, Any]], target: Mapping[str, Any],
 
 def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Policy,
           unit_object: int, hits: Mapping[int, int],
-          bosses: Collection[int]) -> dict[str, object]:
+          bosses: Collection[int], will: int, exclude: Collection[int]) -> dict[str, object]:
     units = state.get("units")
     if not isinstance(units, list):
         raise _Unknown("state_units")
@@ -109,7 +118,10 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         if (not isinstance(row, Mapping) or type(row.get("slot")) is not int
                 or type(row.get("power")) is not int or not isinstance(row.get("name"), str)):
             raise _Unknown("weapon_row")
-        by_slot[row["slot"]] = dict(row)
+        if type(row.get("will", 0)) is not int:
+            raise _Unknown("weapon_will")
+        if row.get("will", 0) <= will and row["slot"] not in exclude:
+            by_slot[row["slot"]] = dict(row)
     here = _tile(me)
     foes = [u for u in units if u.get("raw_menu_group_byte") == targets.ENEMY_GROUP and _alive(u)]
     for foe in foes:
@@ -138,8 +150,9 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
             raise _Unknown("targets") from exc
         per: dict[int, set[int]] = {}
         entries: list[Mapping[str, Any]] = answer["weapons"]  # type: ignore[assignment]
+        sure = _certain_rows(rows, planned["en"])
         for entry in entries:
-            if entry["usable"] and entry["targets"]:
+            if entry["usable"] and entry["targets"] and entry["slot"] in sure:
                 per[entry["slot"]] = {t["object"] for t in entry["targets"]}
         reach.append(per)
 
@@ -174,9 +187,10 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
 
 def plan_attack(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Policy,
                 unit_object: int, *, hits: Mapping[int, int] | None = None,
+                will: int = ASSUMED_WILL, exclude: Collection[int] = (),
                 bosses: Collection[int] = frozenset()) -> dict[str, object]:
     """One act instruction (or handover) for `unit_object`; see the module docstring."""
     try:
-        return _plan(state, weapon_read, policy, unit_object, hits or {}, bosses)
+        return _plan(state, weapon_read, policy, unit_object, hits or {}, bosses, will, exclude)
     except (_Unknown, KeyError, TypeError, ValueError) as exc:
         return _handover(f"unknown_{exc}")
