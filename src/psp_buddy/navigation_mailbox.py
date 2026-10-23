@@ -10,11 +10,11 @@ from pathlib import Path
 from uuid import uuid4
 
 OPERATIONS = ("press", "verify", "observe", "dump", "state", "weapons", "targets", "hit", "goto",
-              "probe_move", "act", "plan_act", "turn_next")
+              "probe_move", "act", "plan_act", "turn_next", "end_turn", "enemy_phase")
 
 
 def _deadline(operation: str) -> int:
-    slow = ("goto", "probe_move", "act", "plan_act")
+    slow = ("goto", "probe_move", "act", "plan_act", "end_turn", "enemy_phase")
     return 10 if operation == "press" else 120 if operation in slow else 60
 
 

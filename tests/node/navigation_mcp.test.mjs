@@ -7,7 +7,7 @@ const args = {sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),co
 test('SDK exposes only bounded navigation tools and rejects unsafe arguments', async () => {
  const calls=[]; const server=createNavigationServer({execute:async (...values)=>{calls.push(values);return {content:[{type:'text',text:'{}'}]};}});
  const [a,b]=InMemoryTransport.createLinkedPair(); await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b);
- try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_read_hit','ppsspp_turn_next','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_plan_act','ppsspp_act','ppsspp_verify_info']);
+ try {assert.deepEqual((await client.listTools()).tools.map(t=>t.name),['ppsspp_press_button','ppsspp_observe','ppsspp_dump_ram','ppsspp_read_state','ppsspp_read_weapons','ppsspp_read_targets','ppsspp_read_hit','ppsspp_turn_next','ppsspp_end_turn','ppsspp_enemy_phase','ppsspp_goto_tile','ppsspp_probe_move_range','ppsspp_plan_act','ppsspp_act','ppsspp_verify_info']);
  await client.callTool({name:'ppsspp_press_button',arguments:args});assert.equal(calls.length,1);
  for (const changed of [{button:'start'},{duration:0},{extra:1},{screen_file:'../x.png'},{button:'circle',purpose:'cursor'},{button:'start',purpose:'cursor'},{button:'circle',purpose:'confirm_attack'}]) await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,...changed}}));
  await client.callTool({name:'ppsspp_read_state',arguments:{sequence:3}});assert.equal(calls.length,2);
@@ -35,6 +35,13 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288}}));
  await client.callTool({name:'ppsspp_turn_next',arguments:{sequence:1}});assert.equal(calls.at(-1)[0],'turn_next');
  for (const bad of [{},{sequence:0},{sequence:1,extra:1},{sequence:'1'}]) await assert.rejects(client.callTool({name:'ppsspp_turn_next',arguments:bad}));
+ const et={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',phase:'open'};
+ await client.callTool({name:'ppsspp_end_turn',arguments:et});assert.equal(calls.at(-1)[0],'end_turn');
+ await client.callTool({name:'ppsspp_end_turn',arguments:{...et,context:'system_menu',phase:'confirm',highlighted_entry:'EndTurn'}});assert.equal(calls.at(-1)[0],'end_turn');
+ for (const bad of [{phase:'x'},{context:'info'},{highlighted_entry:'Save'},{button:'circle'},{phase:'confirm'},{sequence:0}]) await assert.rejects(client.callTool({name:'ppsspp_end_turn',arguments:{...et,...bad}}));
+ await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2}});assert.equal(calls.at(-1)[0],'enemy_phase');
+ await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2,accept_losses:true}});assert.equal(calls.at(-1)[0],'enemy_phase');
+ for (const bad of [{},{sequence:0},{sequence:2,screen_file:'x.png'},{sequence:2,accept_losses:'yes'}]) await assert.rejects(client.callTool({name:'ppsspp_enemy_phase',arguments:bad}));
  const pa={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288,policy:'cheap weapons below 20%',bosses:[149302976]};
  await client.callTool({name:'ppsspp_plan_act',arguments:pa});assert.equal(calls.at(-1)[0],'plan_act');
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,min_hit:40}});

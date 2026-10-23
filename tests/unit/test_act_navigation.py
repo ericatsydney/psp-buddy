@@ -405,3 +405,134 @@ def test_an_unwritable_turn_report_does_not_lose_the_plan_act_result(owned, tmp_
         nxt = await service.execute('turn_next', {'sequence': 2})
         assert 'locked' in nxt['report_error']
     asyncio.run(scenario())
+
+
+# ---- M10: End Turn and the enemy phase ------------------------------------------------------
+
+def phase_sim(**flags):
+    from test_end_turn import EnemyPhaseSim
+    sim = EnemyPhaseSim(**flags)
+    for u in sim.units:
+        u['object'] += BASE
+        u['counted_as_unmoved'] = False              # every ally has acted: turn_next is done
+    return sim
+
+
+def test_end_turn_operations_are_known_mailbox_operations():
+    assert {'end_turn', 'enemy_phase'} <= set(OPERATIONS)
+
+
+def test_a_whole_end_turn_reaches_the_next_player_phase_with_circle_only(owned, tmp_path):
+    import json
+    sim = phase_sim(screens=4, hit_ally=True)
+    service, adapter, frame = make(owned, tmp_path, sim)
+    evidence = tmp_path / 'evidence'
+
+    async def scenario():
+        assert (await service.execute('turn_next', {'sequence': 1}))['done'] is True
+        opened = await service.execute('end_turn', frame(sequence=2, phase='open'))
+        assert opened['ok'] is True and opened['phase'] == 'menu_open'
+        assert sim.screen == 'system_menu'
+        confirmed = await service.execute('end_turn', frame(
+            'system_menu', sequence=3, phase='confirm', highlighted_entry='EndTurn'))
+        assert confirmed['ok'] is True and confirmed['phase'] == 'ending'
+        assert json.loads((evidence / 'turn-report.json').read_text(encoding='utf-8'))['ended']
+        sequence, step = 4, {'phase': 'continue'}
+        while step['phase'] == 'continue':
+            step = await service.execute('enemy_phase', {'sequence': sequence})
+            sequence += 1
+        assert step['ok'] is True and step['phase'] == 'done' and step['turn'] == [7, 8]
+        again = await service.execute('enemy_phase', {'sequence': sequence})
+        assert again['phase'] == 'done'
+    asyncio.run(scenario())
+    walk = adapter.sent.index('circle')               # the cursor walk, then only Circle
+    assert set(adapter.sent[:walk]) <= {'up', 'down', 'left', 'right'}
+    assert set(adapter.sent[walk:]) == {'circle'}
+    data = json.loads((evidence / 'enemy-phase-report.json').read_text(encoding='utf-8'))
+    assert data['done'] is True and data['turn'] == [7, 8]
+    assert data['damaged_allies'] == [BASE + 2]
+
+
+def test_end_turn_is_refused_before_the_turn_is_done_and_out_of_order(owned, tmp_path):
+    sim = phase_sim()
+    sim.units[0]['counted_as_unmoved'] = True        # one ally still to play
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):        # turn_next never said done
+            await service.execute('end_turn', frame(sequence=1, phase='open'))
+        assert (await service.execute('turn_next', {'sequence': 1}))['done'] is False
+        with pytest.raises(NavigationRefused):        # not done yet
+            await service.execute('end_turn', frame(sequence=2, phase='open'))
+        with pytest.raises(NavigationRefused):        # confirm without an open menu
+            await service.execute('end_turn', frame('system_menu', sequence=2, phase='confirm',
+                                                    highlighted_entry='EndTurn'))
+        with pytest.raises(NavigationRefused):        # no enemy phase before confirm
+            await service.execute('enemy_phase', {'sequence': 2})
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+@pytest.mark.parametrize('bad', [
+    {'context': 'map'}, {'highlighted_entry': 'Save'}, {'highlighted_entry': None},
+    {'phase': 'other'}])
+def test_confirm_needs_the_system_menu_with_end_turn_highlighted(owned, tmp_path, bad):
+    sim = phase_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        body = {**frame('system_menu', sequence=3, phase='confirm',
+                        highlighted_entry='EndTurn'), **bad}
+        body = {k: v for k, v in body.items() if v is not None}
+        with pytest.raises(NavigationRefused):
+            await service.execute('end_turn', body)
+        with pytest.raises(NavigationRefused):        # a second open is refused too
+            await service.execute('end_turn', frame(sequence=3, phase='open'))
+    asyncio.run(scenario())
+    assert adapter.sent[-1] == 'circle' and adapter.sent.count('circle') == 1
+
+
+def test_a_stopped_enemy_phase_reports_and_sends_nothing_more(owned, tmp_path):
+    import json
+    sim = phase_sim(screens=3, destroy_ally=True)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        stopped = await service.execute('enemy_phase', {'sequence': 4})
+        assert stopped['ok'] is False and stopped['reason'] == 'ally_destroyed'
+        sent = len(adapter.sent)
+        again = await service.execute('enemy_phase', {'sequence': 5})
+        assert again['reason'] == 'ally_destroyed' and len(adapter.sent) == sent
+    asyncio.run(scenario())
+    data = json.loads((tmp_path / 'evidence' / 'enemy-phase-report.json').read_text(
+        encoding='utf-8'))
+    assert data['stopped'] == 'ally_destroyed' and data['destroyed'] == [BASE + 2]
+
+
+def test_enemy_phase_can_accept_a_loss_and_reach_the_next_turn(owned, tmp_path):
+    import json
+    sim = phase_sim(screens=3, destroy_ally=True)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        first = await service.execute('enemy_phase', {'sequence': 4})
+        assert first['reason'] == 'ally_destroyed'
+        for bad in ('yes', 1, None):
+            with pytest.raises(NavigationRefused):
+                await service.execute('enemy_phase', {'sequence': 5, 'accept_losses': bad})
+        done = await service.execute('enemy_phase', {'sequence': 5, 'accept_losses': True})
+        assert done['phase'] == 'done' and done['turn'] == [7, 8]
+    asyncio.run(scenario())
+    data = json.loads((tmp_path / 'evidence' / 'enemy-phase-report.json').read_text(
+        encoding='utf-8'))
+    assert data['done'] is True and data['losses'] == {str(BASE + 2): 'ally_destroyed'}

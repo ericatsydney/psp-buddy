@@ -29,6 +29,22 @@ function validate(operation, args) {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid hit request');
     return;
   }
+  if (operation === 'end_turn') {
+    const keys = Object.keys(args);
+    const base = ['sequence','screen_file','screen_sha256','context','phase'];
+    const extra = args.phase === 'confirm' ? ['highlighted_entry'] : [];
+    if (!['open','confirm'].includes(args.phase) || keys.length !== base.length + extra.length || ![...base,...extra].every(k => Object.hasOwn(args,k)) ||
+        !Number.isSafeInteger(args.sequence) || args.sequence < 1 || typeof args.screen_file !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\.(png|jpg|jpeg)$/i.test(args.screen_file) || !/^[0-9a-f]{64}$/.test(args.screen_sha256 ?? '') ||
+        args.context !== (args.phase === 'open' ? 'map' : 'system_menu') || (args.phase === 'confirm' && args.highlighted_entry !== 'EndTurn')) throw new Error('Invalid end_turn request');
+    return;
+  }
+  if (operation === 'enemy_phase') {
+    const keys = Object.keys(args);
+    if (!keys.every(k => ['sequence','accept_losses'].includes(k)) || !Number.isSafeInteger(args.sequence) || args.sequence < 1 ||
+        (Object.hasOwn(args,'accept_losses') && typeof args.accept_losses !== 'boolean')) throw new Error('Invalid enemy_phase request');
+    return;
+  }
   if (operation === 'state' || operation === 'turn_next') {
     if (Object.keys(args).length !== 1 || !Number.isSafeInteger(args.sequence) || args.sequence < 1) throw new Error('Invalid state request');
     return;
@@ -163,7 +179,7 @@ export async function createNavigationClient(mailbox, trialId, { timeoutMs = 125
         } finally { await handle.close(); }
         try { await link(temporary, pending); published = true; }
         finally { await unlink(temporary); }
-        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move' || operation === 'act' || operation === 'plan_act') ? 125000 : 65000);
+        const deadline = Date.now() + Math.min(timeoutMs, operation === 'press' ? 15000 : (operation === 'goto' || operation === 'probe_move' || operation === 'act' || operation === 'plan_act' || operation === 'end_turn' || operation === 'enemy_phase') ? 125000 : 65000);
         while (Date.now() < deadline) {
           await safeDirectory(root);
           let value;
@@ -200,6 +216,8 @@ export function createNavigationServer(client) {
     {name:'ppsspp_read_targets',description:'For each weapon of one unit, list the enemy units in range from its current tile (memory only, Manhattan distance). Set moved when the unit has already moved this turn.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},moved:{type:'boolean'}},required:['sequence','object'],additionalProperties:false}},
     {name:'ppsspp_read_hit',description:'Read the hit chance under the cursor from memory; meaningful only while a weapon target select is open (-10000 = not a target). Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_turn_next',description:'Memory only: which ready ally to play next this turn (nearest to a foe first), how many remain, the skipped units with reasons, and done/stopped. Records come from ppsspp_plan_act; turn-report.json is written to the evidence folder. Sends no input.',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1}},required:['sequence'],additionalProperties:false}},
+    {name:'ppsspp_end_turn',description:'End the player turn once ppsspp_turn_next says done. phase "open" (fresh map screenshot): walk the cursor to an empty tile and open the system menu. phase "confirm" (fresh screenshot of the system menu with EndTurn highlighted): Circle on EndTurn and on "End phase? Yes". Then call ppsspp_enemy_phase.',inputSchema:{type:'object',properties:{...common,phase:{type:'string',enum:['open','confirm']},highlighted_entry:{type:'string',enum:['EndTurn']}},required:[...Object.keys(common),'phase'],additionalProperties:false}},
+    {name:'ppsspp_enemy_phase',description:'After a confirmed End Turn: press only Circle (the game default on every enemy forecast and message) until memory shows the next player phase (turn +1, allies unmoved); about 100 s per call, repeat while phase is "continue". Stops on an ally destroyed or lost, a turn jump, unreadable memory or the whole-phase budget. Writes enemy-phase-report.json. accept_losses: true records a destroyed or lost ally instead of stopping and resumes a phase that stopped only for that; a story scene after a loss still stops (scene_after_loss), as does a stage restart (stage_restart).',inputSchema:{type:'object',properties:{sequence:{type:'integer',minimum:1},accept_losses:{type:'boolean'}},required:['sequence'],additionalProperties:false}},
     {name:'ppsspp_goto_tile',description:'Walk the map cursor to a tile, verifying every step from the cursor field; cursor presses only.',inputSchema:{type:'object',properties:{...common,target:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'target'],additionalProperties:false}},
     {name:'ppsspp_probe_move_range',description:'View only: walk to an ally, open its Move range, read the reachable tiles from memory, back out. Needs the probe declaration.',inputSchema:{type:'object',properties:{...common,tile:{type:'array',items:{type:'integer'},minItems:2,maxItems:2}},required:[...Object.keys(common),'tile'],additionalProperties:false}},
     {name:'ppsspp_plan_act',description:'From a policy text alone: pick one legal Move + Attack for one ready ally unit, run it to the attack forecast and fire only if the forecast agrees with the plan (otherwise back out and report why). min_hit (default 1) is the lowest forecast hit% it will fire at. Appends each fired attack to damage-log.jsonl. Needs the act declaration and a fresh map screenshot.',inputSchema:{type:'object',properties:{...common,unit_object:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},policy:{type:'string',maxLength:400},bosses:{type:'array',items:{type:'integer',minimum:0x08800000,maximum:0x09FFFFFF},maxItems:8},min_hit:{type:'integer',minimum:1,maximum:100}},required:[...Object.keys(common),'unit_object','policy'],additionalProperties:false}},
@@ -208,7 +226,7 @@ export function createNavigationServer(client) {
   ];
   server.setRequestHandler(ListToolsRequestSchema, async()=>({tools}));
   server.setRequestHandler(CallToolRequestSchema,async({params})=>{
-    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act',ppsspp_plan_act:'plan_act',ppsspp_turn_next:'turn_next'}[params.name] ?? null;
+    const operation = {ppsspp_press_button:'press',ppsspp_verify_info:'verify',ppsspp_observe:'observe',ppsspp_dump_ram:'dump',ppsspp_read_state:'state',ppsspp_read_weapons:'weapons',ppsspp_read_targets:'targets',ppsspp_read_hit:'hit',ppsspp_goto_tile:'goto',ppsspp_probe_move_range:'probe_move',ppsspp_act:'act',ppsspp_plan_act:'plan_act',ppsspp_turn_next:'turn_next',ppsspp_end_turn:'end_turn',ppsspp_enemy_phase:'enemy_phase'}[params.name] ?? null;
     validate(operation,params.arguments);
     return client.execute(operation,params.arguments);
   });

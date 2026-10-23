@@ -15,7 +15,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from . import act as act_macro
-from . import battle_state, plan_act, turn
+from . import battle_state, end_turn, plan_act, turn
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
@@ -140,6 +140,9 @@ class InfoNavigation:
         self._act_pending: dict[str, object] | None = None
         self._turn = turn.TurnLog()
         self._turn_state: Mapping[str, object] = {}
+        self._turn_done = False                 # the last turn_next said done (not stopped)
+        self._end_menu_open = False             # end_turn "open" succeeded, "confirm" not yet
+        self._end_phase: end_turn.Phase | None = None
         self._map_size = map_size
         self._poll = poll_seconds
         self._goto_presses = 0
@@ -307,7 +310,8 @@ class InfoNavigation:
         if not isinstance(arguments, dict):
             raise ValueError("arguments must be an object")
         if operation not in ("press", "verify", "observe", "dump", "state", "weapons", "targets",
-                             "hit", "goto", "probe_move", "act", "plan_act", "turn_next"):
+                             "hit", "goto", "probe_move", "act", "plan_act", "turn_next",
+                             "end_turn", "enemy_phase"):
             raise ValueError("unsupported operation")
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
@@ -331,6 +335,16 @@ class InfoNavigation:
             if keys != {"sequence"} or self._read_state is None or (
                     self._state_reads >= MAX_STATE_READS):
                 raise ValueError("turn_next needs only a sequence, a reader and budget")
+            return "", None
+        if operation == "end_turn":
+            return self._check_end_turn(arguments, keys), None
+        if operation == "enemy_phase":
+            # Circle only, after a confirmed End Turn; memory decides when it is over.
+            if (not {"sequence"} <= keys <= {"sequence", "accept_losses"}
+                    or type(arguments.get("accept_losses", False)) is not bool
+                    or self._end_phase is None):
+                raise ValueError("enemy_phase needs a sequence (accept_losses optional) and a "
+                                 "confirmed End Turn")
             return "", None
         if operation == "hit":
             # Pure memory read of the hover hit chance (valid only in target select).
@@ -542,12 +556,81 @@ class InfoNavigation:
         error = self._write_turn_report()
         return {**outcome, "report_error": error} if error else outcome
 
+    def _check_end_turn(self, arguments: Mapping[str, object], keys: set[str]) -> str:
+        decl = self._declaration
+        if (decl is None or decl["actions"] != ["act"] or self._read_state is None
+                or self._read_cursor is None or self._map_size is None):
+            raise ValueError("end_turn needs the act declaration and the memory readers")
+        phase = arguments.get("phase")
+        if phase == "open":
+            if keys != BASE_KEYS | {"phase"} or arguments["context"] != "map":
+                raise ValueError("end_turn open needs a map screenshot")
+            if self._end_phase is not None or self._end_menu_open:
+                raise ValueError("End Turn was already started in this trial")
+            if not self._turn_done or self._turn.stopped is not None:
+                raise ValueError("End Turn needs turn_next to report the turn done")
+            if self._act_pending is not None:
+                raise ValueError("a forecast is waiting: fire it or cancel it first")
+        elif phase == "confirm":
+            if (keys != BASE_KEYS | {"phase", "highlighted_entry"}
+                    or arguments["context"] != "system_menu"
+                    or arguments["highlighted_entry"] != "EndTurn"):
+                raise ValueError("end_turn confirm needs the system menu with EndTurn highlighted")
+            if not self._end_menu_open:
+                raise ValueError("end_turn confirm needs a successful open first")
+        else:
+            raise ValueError("end_turn phase must be open or confirm")
+        name = self._frame(arguments)
+        if name in self._stale or self._uses.get(name, 0) >= 1:
+            raise ValueError("end_turn needs a fresh screenshot")
+        return name
+
+    async def _run_end_turn(self, arguments: Mapping[str, object]) -> dict[str, object]:
+        self._act_deadline = time.monotonic() + ACT_SECONDS
+        io = self._act_io()
+        if arguments["phase"] == "open":
+            try:
+                start = await io.state()
+            except act_macro.ActIOError as exc:
+                return {"ok": False, "phase": "stopped", "reason": f"io_error: {exc}"}
+            opened = await end_turn.open_menu(io, start)
+            self._end_menu_open = bool(opened.get("ok"))
+            return opened
+        try:
+            phase = end_turn.Phase(await io.state())
+        except (act_macro.ActIOError, ValueError) as exc:
+            return {"ok": False, "phase": "stopped", "reason": f"unknown_state: {exc}"}
+        self._end_menu_open = False
+        self._end_phase = phase
+        return await end_turn.confirm(io, phase)
+
+    async def _run_enemy_phase(self, accept_losses: bool) -> dict[str, object]:
+        assert self._end_phase is not None
+        self._act_deadline = time.monotonic() + ACT_SECONDS
+        outcome = await end_turn.advance(self._act_io(), self._end_phase,
+                                         accept_losses=accept_losses)
+        error = self._write_enemy_report()
+        return {**outcome, "report_error": error} if error else outcome
+
+    def _write_enemy_report(self) -> str | None:
+        """Rewrite enemy-phase-report.json; errors are returned, never raised."""
+        assert self._end_phase is not None
+        try:
+            self._evidence.mkdir(parents=True, exist_ok=True)
+            (self._evidence / "enemy-phase-report.json").write_text(
+                json.dumps(end_turn.report(self._end_phase), allow_nan=False, indent=1),
+                encoding="utf-8")
+        except (OSError, TypeError, ValueError) as exc:
+            return repr(exc)
+        return None
+
     def _write_turn_report(self) -> str | None:
         """Rewrite turn-report.json; a write error is returned, never raised (the action may
         already have happened, and an exception would disable the helper mid-turn)."""
         try:
             self._evidence.mkdir(parents=True, exist_ok=True)
-            data = turn.report(self._turn, self._turn_state)
+            data = {**turn.report(self._turn, self._turn_state),
+                    "ended": bool(self._end_phase is not None and self._end_phase.confirmed)}
             (self._evidence / "turn-report.json").write_text(
                 json.dumps(data, allow_nan=False, indent=1), encoding="utf-8")
         except (OSError, TypeError, ValueError) as exc:
@@ -736,6 +819,29 @@ class InfoNavigation:
                            "stage": answer.get("stage"), "reason": answer.get("reason"),
                            "unit_object": arguments["unit_object"]})
                 return answer
+            if operation == "end_turn":
+                outcome = await self._run_end_turn(arguments)
+                if arguments["phase"] == "confirm":
+                    error = self._write_turn_report()
+                    if error:
+                        outcome = {**outcome, "report_error": error}
+                # Screens shown before this input must not confirm the next step.
+                self._stale = ({p.name for p in self._root.iterdir()} if self._root.is_dir()
+                               else set())
+                answer = {**outcome, "sequence": sequence, "act_presses_used": self._act_presses}
+                self._log({"sequence": sequence, "operation": "end_turn", "screen": name,
+                           "phase": arguments["phase"], "ok": answer.get("ok"),
+                           "result": answer.get("phase"), "reason": answer.get("reason")})
+                return answer
+            if operation == "enemy_phase":
+                outcome = await self._run_enemy_phase(arguments.get("accept_losses") is True)
+                answer = {**outcome, "sequence": sequence, "act_presses_used": self._act_presses}
+                if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
+                    answer = {**answer, "deltas": [], "truncated": True}
+                self._log({"sequence": sequence, "operation": "enemy_phase",
+                           "ok": answer.get("ok"), "result": answer.get("phase"),
+                           "reason": answer.get("reason"), "presses": answer.get("presses")})
+                return answer
             if operation == "plan_act":
                 self._evidence.mkdir(parents=True, exist_ok=True)
                 outcome = await self._run_plan_act(arguments)
@@ -829,6 +935,7 @@ class InfoNavigation:
                     raise
                 self._turn_state = state
                 chosen = turn.next_unit(state, self._turn)
+                self._turn_done = bool(chosen["done"]) and chosen["stopped"] is None
                 answer = {**chosen, "skipped": {str(k): v for k, v in chosen["skipped"].items()},
                           "sequence": sequence}
                 error = self._write_turn_report()
