@@ -215,7 +215,8 @@ class Launcher:
 
     def prepare(self, config: RunConfig, *, state_filename: str,
                 system_root: Path, graphics_backend: int | None = None,
-                runtime_root: Path | None = None) -> PreparedLaunch:
+                runtime_root: Path | None = None,
+                checkpoint: tuple[Path, str] | None = None) -> PreparedLaunch:
         system_root = system_root.absolute()
         archive: Path | None = None
         prior_entries: Inventory = ()
@@ -355,6 +356,22 @@ class Launcher:
         state = psp / "PPSSPP_STATE" / state_filename
         if not state.is_file() or not state.stat().st_size:
             raise ValueError("selected state is missing or empty")
+        if checkpoint is not None:
+            # A save state kept outside every save root (user, 24 Oct: replay the enemy phase).
+            # It is copied into this trial's own folder, never into the memstick, which seeds
+            # the next launch, and must match the SHA-256 recorded when it was made.
+            source, digest = checkpoint
+            source = source.absolute()
+            _safe_path(source)
+            if (not source.is_file() or source.stat().st_nlink != 1
+                    or any(paths_overlap(source, root) for root in config.save_roots)
+                    or sha256(source) != digest):
+                raise ValueError("checkpoint missing, unsafe, inside a save root or changed")
+            state = writable_trial_root(receipt) / "checkpoint" / state_filename
+            state.parent.mkdir()
+            shutil.copy2(source, state)
+            if sha256(state) != digest:
+                raise ValueError("checkpoint copy hash mismatch")
         for root in (app, memstick, psp, system, psp / "SAVEDATA", psp / "PPSSPP_STATE"):
             _writable(root)
         args = (str(exe), f"--config={system / 'ppsspp.ini'}",

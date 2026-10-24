@@ -177,3 +177,19 @@ def test_failure_before_any_move_or_fire_is_a_skip(stage: str) -> None:
     assert log.skipped == {1: f"{stage}:cursor_did_not_reach_tile"} and log.stopped is None
     st = state(unit(1, 10, 11, 0), unit(2, 10, 12, 0), FOE)
     assert next_unit(st, log)["unit_object"] == 2
+
+
+def test_a_bonus_action_is_kept_in_the_entry() -> None:
+    log = TurnLog()
+    result = {"ok": True, "phase": "fired", "plan": {"act": {"attack": {"weapon": "W"}}},
+              "outcome": {"deltas": [], "bonus_action": True}}
+    assert log.record(1, result) == "fired"
+    assert log.entries[0]["bonus_action"] is True
+
+
+def test_a_dialogue_still_pending_keeps_the_turn_going() -> None:
+    log = TurnLog()
+    result = {"ok": False, "phase": "dialogue_pending", "reason": "dialogue_not_finished",
+              "dialogue_settled": {"settled": False, "presses": 9}}
+    assert log.record(7, result) == "waiting"
+    assert log.stopped is None and 7 not in log.skipped

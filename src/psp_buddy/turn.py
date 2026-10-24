@@ -50,7 +50,7 @@ class TurnLog:
         self.stopped: str | None = None
 
     def record(self, unit_object: int, result: Mapping[str, Any]) -> str:
-        """Classify one `plan_act` answer: "fired", "skipped", "standby" or "stop"."""
+        """Classify one `plan_act` answer: "fired", "skipped", "standby", "waiting" or "stop"."""
         outcome, reason = self._classify(result)
         attack = ((result.get("plan") or {}).get("act") or {}).get("attack") or {}
         forecast = result.get("forecast") or {}
@@ -59,7 +59,9 @@ class TurnLog:
             "unit": unit_object, "outcome": outcome, "reason": reason,
             "weapon": attack.get("weapon"), "slot": attack.get("slot"),
             "target": attack.get("target_object"), "hit": forecast.get("hit"),
-            "moved": bool(result.get("moved")), "deltas": done.get("deltas", [])})
+            "moved": bool(result.get("moved")), "deltas": done.get("deltas", []),
+            **({"spirit": result["spirit"]} if "spirit" in result else {}),
+            **({"bonus_action": True} if done.get("bonus_action") else {})})
         if outcome == "skipped":
             self.skipped[unit_object] = str(reason)
         elif outcome == "stop" and self.stopped is None:
@@ -82,6 +84,8 @@ class TurnLog:
         reason = result.get("reason")
         if result.get("ok") and phase == "fired":
             return "fired", None
+        if phase == "dialogue_pending":
+            return "waiting", reason            # a story dialogue is still being skipped
         if phase == "handover":
             return ("skipped", reason) if reason in SKIP_HANDOVERS else ("stop", reason)
         if phase in ("declined", "failed") and result.get("moved") and result.get("standby"):

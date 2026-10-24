@@ -6,17 +6,20 @@ tile, open the unit's Move range once (select, Move, read, back out) and plan ag
 The gate compares what the game shows with what was planned: the same weapon and target, the hit
 chance seen when the target was chosen equals the forecast (and the planned one when known), and
 the chance is at least `min_hit`. Every fired attack appends the observed deltas to a damage log
-so the damage model of docs/research/2026-10-21-damage-model.md can be fitted later.
+so the damage model of docs/research/2026-10-21-damage-model.md can be fitted later. With the
+policy clause `use sense then focus before attacking`, a unit whose plan has an attack first casts
+Sense or Focus (`spirit_cast`, once, from the map); the result then carries `spirit`, and the
+planned hit no longer gates the forecast because the spirit changes it.
 """
 
 import json
 from collections.abc import Collection, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from . import act
+from . import act, spirit_cast, targets
 from .models import Policy
-from .tactics import plan_attack
+from .tactics import BOSS_NAMES, boss_objects, plan_attack
 
 MIN_HIT = 1
 MAX_REPLANS = 2          # extra plans after the game refuses a weapon (greyed, out of reach)
@@ -136,24 +139,78 @@ def _damage_record(plan: Mapping[str, Any], gate_hit: int, fired: Mapping[str, A
 async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        bosses: Collection[int] = frozenset(), min_hit: int = MIN_HIT,
                        hits: Mapping[int, int] | None = None,
-                       damage_log: Path | None = None) -> dict[str, Any]:
+                       damage_log: Path | None = None,
+                       boss_names: Collection[str] | None = None,
+                       mech_names: dict[int, str] | None = None,
+                       settle_first: bool = False) -> dict[str, Any]:
     """One planned, gated attack for `unit_object`.
+
+    With `boss_names` (or `non_boss_first`, which defaults them to `tactics.BOSS_NAMES`) the
+    living foes' mech names are read once into `mech_names` (a per-trial cache) and
+    `tactics.boss_objects` adds the named and high-max-HP foes to `bosses`.
 
     Never raises for game, read or input problems: an exception would make the handoff disable
     itself with the emulator on an open menu, so every failure becomes a report.
     """
+    notes: dict[str, Any] = {}
     try:
-        return await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log)
+        if settle_first:
+            # The previous act left a story dialogue on screen (its attack was done).
+            notes["dialogue_settled"] = await act.settle_dialogue(io, reserve=OVERLAY_NEEDS)
+            settled = notes["dialogue_settled"]
+            if not settled["settled"]:
+                # Progress made: the next call goes on with a fresh budget (the turn waits).
+                phase = "dialogue_pending" if settled["presses"] else "failed"
+                return {"ok": False, "phase": phase, "stage": "dialogue",
+                        "reason": "dialogue_not_finished", "moved": False, **notes}
+        if boss_names is None and policy.non_boss_first:
+            boss_names = BOSS_NAMES
+        if boss_names is not None:
+            bosses = set(bosses) | await _bosses(io, boss_names,
+                                                 {} if mech_names is None else mech_names)
+        answer = await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log,
+                                     notes)
     except act.ActIOError as exc:
-        return {"ok": False, "phase": "failed", "stage": "io", "reason": f"io_error: {exc}"}
+        answer = {"ok": False, "phase": "failed", "stage": "io", "reason": f"io_error: {exc}"}
     except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
-        return {"ok": False, "phase": "failed", "stage": "unexpected",
-                "reason": f"unexpected_data: {exc!r}"}
+        answer = {"ok": False, "phase": "failed", "stage": "unexpected",
+                  "reason": f"unexpected_data: {exc!r}"}
+    return {**answer, **notes}
+
+
+async def _cast(io: act.ActIO, state: Mapping[str, Any], unit_object: int,
+                mech_name: object) -> dict[str, Any]:
+    """Sense or Focus before the attack; an IO without the spirit reads skips it."""
+    if not all(hasattr(io, name) for name in ("spirits", "spirit_cursor_bytes",
+                                              "command_menu")):
+        return {"status": "skipped", "reason": "no_spirit_reader"}
+    unit = next((u for u in state.get("units", []) if u.get("object") == unit_object), None)
+    if unit is None:
+        return {"status": "skipped", "reason": "unit_not_found"}
+    return await spirit_cast.cast_before_attack(
+        cast(spirit_cast.SpiritIO, io), unit_object, (unit["tile_x"], unit["tile_y"]),
+        mech_name=mech_name if isinstance(mech_name, str) else None, reserve=REPLAN_NEEDS)
+
+
+async def _bosses(io: act.ActIO, names: Collection[str],
+                  cache: dict[int, str]) -> frozenset[int]:
+    """Named or high-max-HP foes; a foe whose name cannot be read counts by max HP only."""
+    state = await io.state()
+    units: list[Mapping[str, Any]] = state.get("units", [])     # type: ignore[assignment]
+    for unit in units:
+        obj = unit.get("object")
+        if (unit.get("raw_menu_group_byte") == targets.ENEMY_GROUP and type(obj) is int
+                and obj not in cache):
+            try:
+                cache[obj] = str((await io.read_weapons(obj)).get("mech_name", ""))
+            except act.ActIOError:
+                continue
+    return boss_objects(units, cache, names)
 
 
 async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                         bosses: Collection[int], min_hit: int, hits: Mapping[int, int] | None,
-                        damage_log: Path | None) -> dict[str, Any]:
+                        damage_log: Path | None, notes: dict[str, Any]) -> dict[str, Any]:
     state = await io.state()
     weapons = await io.read_weapons(unit_object)
     excluded: list[int] = []
@@ -168,6 +225,14 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                     **({"excluded": excluded} if excluded else {})}
         instruction: dict[str, Any] = plan["act"]       # type: ignore[assignment]
         moved = bool(instruction.get("move_to"))
+        if policy.spirit_before_attack and "spirit" not in notes:
+            notes["spirit"] = await _cast(io, state, unit_object, weapons.get("mech_name"))
+            if notes["spirit"]["status"] == "mismatch":
+                return {"ok": False, "phase": "failed", "stage": "spirit",
+                        "reason": "spirit_mismatch", "plan": plan, "moved": False}
+            if notes["spirit"].get("on_map") is False:     # never act on an unknown screen
+                return {"ok": False, "phase": "failed", "stage": "spirit",
+                        "reason": "spirit_menus_not_closed", "plan": plan, "moved": False}
         first = await act.run_act(instruction, io, commit=False)
         failed_at = first.get("stage")
         # The game can refuse a weapon the data allows (22 Oct live: greyed, no enemy in reach).
@@ -192,6 +257,8 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
     # Menus open at the forecast: select, [attack menu], weapon list and forecast (a Move closes
     # the select level). A Move cannot be undone: the unit stays on the new tile.
     open_menus = 3 if moved else 4
+    if notes.get("spirit", {}).get("status") == "cast":
+        expect = {**expect, "hit": None}            # Sense/Focus change the hit chance
     reason = forecast_gate(instruction, first, expect, min_hit)
     if reason is None and io.time_left() < act.FIRE_NEEDS:
         reason = "no_time_to_fire"

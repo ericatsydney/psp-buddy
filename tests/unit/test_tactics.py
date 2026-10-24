@@ -91,6 +91,16 @@ def test_boss_above_threshold_gets_strongest_weapon() -> None:
     assert attack(below)["attack"]["slot"] == 2
 
 
+def test_strongest_boss_weapon_at_any_hp_when_the_threshold_is_zero() -> None:
+    # User, 24 Oct: Mercurius, Vayeate and Wing Zero take no damage from weaker weapons, so the
+    # turn policy uses "strongest boss weapons above 0%": a damaged boss still gets the strongest.
+    from psp_buddy.policy import parse_policy
+    policy = parse_policy("cheap weapons below 20%; strongest boss weapons above 0%")
+    below = plan_attack(state(near_hp=10000, far_hp=24000), weapons(DESTINY_WEAPONS[1:4]), policy,
+                        DESTINY, bosses=frozenset({NEAR_FOE}))
+    assert attack(below)["attack"]["slot"] == 3 and below["expect"]["rule"] == "strongest"
+
+
 def test_cheap_weapon_on_nearly_dead_foe() -> None:
     result = plan_attack(state(near_hp=3000), weapons(), POLICY, DESTINY)
     assert attack(result)["attack"]["slot"] == 1         # en_cost 0 beats 5 and 35
@@ -271,3 +281,44 @@ def test_retained_live_state_picks_flashedge_on_mercurius() -> None:
     live["reachable"] = []               # nothing selected in that capture: current tile only
     result = plan_attack(live, weapons(), POLICY, DESTINY)
     assert attack(result)["attack"]["slot"] == 2
+
+
+TAURUS = 149301208       # (12,16) 2603/6600, far from Destiny
+NEAR_TAURUS = 149301312
+
+
+def test_bosses_by_name_or_by_twice_the_median_max_hp() -> None:
+    from psp_buddy.tactics import boss_objects
+    foes = state(extra=[unit(TAURUS, 12, 16, 12, 2603, 6600, ready=False)])["units"]
+    names = {NEAR_FOE: "Mercurius", FAR_FOE: "Vayeate", TAURUS: "Taurus", THIRD: "WingGundamZero"}
+    # by name only (HP factor off): spaces, "・" and case do not matter; allies and the third
+    # force are never bosses
+    assert boss_objects(foes, names, ["mercurius", "Wing Gundam Zero"], factor=0) == {NEAR_FOE}
+    # by HP only: median of 6600, 24000, 26000 is 24000 -> nobody reaches 48000
+    assert boss_objects(foes, {}, [], factor=2) == frozenset()
+    two_taurus = foes + [unit(NEAR_TAURUS, 12, 15, 12, 4104, 6600, ready=False)]
+    # median of 6600, 6600, 24000, 26000 is 15300 -> 26000 < 30600: still none; factor 1.5 -> both
+    assert boss_objects(two_taurus, {}, [], factor=2) == frozenset()
+    assert boss_objects(two_taurus, {}, [], factor=1.5) == {NEAR_FOE, FAR_FOE}
+    assert boss_objects(two_taurus, names, ["Vayeate"], factor=1.5) == {NEAR_FOE, FAR_FOE}
+
+
+def test_live_turn7_foes_make_mercurius_and_vayeate_bosses_by_hp() -> None:
+    from psp_buddy.tactics import boss_objects
+    foes = [unit(1, 12, 16, 12, 2603, 6600), unit(2, 12, 15, 12, 4104, 6600),
+            unit(3, 12, 17, 12, 5211, 9600), unit(FAR_FOE, 16, 8, 12, 13393, 24000),
+            unit(NEAR_FOE, 18, 8, 12, 10507, 26000)]
+    assert boss_objects(foes, {}, []) == {FAR_FOE, NEAR_FOE}
+
+
+def test_non_bosses_first_when_the_policy_says_so() -> None:
+    near_grunt = unit(TAURUS, 17, 9, 12, 6600, 6600, ready=False)   # undamaged, in reach
+    s = state(extra=[near_grunt])
+    plain = attack(plan_attack(s, weapons(), POLICY, DESTINY, bosses={NEAR_FOE, FAR_FOE}))
+    assert plain["attack"]["target_object"] == NEAR_FOE               # damaged boss first
+    policy = parse_policy("target non-bosses before bosses")
+    first = attack(plan_attack(s, weapons(), policy, DESTINY, bosses={NEAR_FOE, FAR_FOE}))
+    assert first["attack"]["target_object"] == TAURUS
+    # with no grunt in reach a boss is still attacked
+    alone = attack(plan_attack(state(), weapons(), policy, DESTINY, bosses={NEAR_FOE, FAR_FOE}))
+    assert alone["attack"]["target_object"] == NEAR_FOE

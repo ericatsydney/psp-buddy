@@ -14,18 +14,23 @@ The tile is the nearest reachable one (current tile first) from which the chosen
 target; after a move only weapons with the P flag count, and the weapon must still be
 affordable after the move's EN cost (assumed 1 EN per move-cost point, from the 21 Oct live move).
 `exclude` lists weapon slots the caller found unusable in game (greyed out).
-Boss identity is supplied by the caller. Pilot will is not decoded: weapons needing more
-than `will` (default 100) are skipped (22 Oct live: Strike Freedom Super Dragoon needs 140).
+Boss identity is supplied by the caller (`boss_objects` derives it from names and max HP); with
+`non_boss_first` (user rule, 23 Oct) every non-boss foe is tried before any boss. Pilot will is
+not decoded: weapons needing more than `will` (default 100) are skipped (22 Oct live: Strike
+Freedom Super Dragoon needs 140).
 """
 
 from collections.abc import Collection, Mapping, Sequence
 from fractions import Fraction
+from statistics import median
 from typing import Any
 
 from . import act, battle_state, targets
 from .models import Policy
 
 ASSUMED_WILL = 100       # pilot will is not decoded; weapons needing more are never chosen
+BOSS_NAMES = ("Mercurius", "Vayeate", "Wing Gundam Zero")   # user, 23 Oct (stage 23)
+BOSS_HP_FACTOR = 2       # user, 23 Oct: max HP at least twice the foes' median is a boss
 Tile = tuple[int, int]
 Candidate = tuple[dict[str, Any], int]      # weapon, number of tiles tried before it reached
 
@@ -88,6 +93,26 @@ def _rule_and_pick(options: Sequence[dict[str, Any]], target: Mapping[str, Any],
         return "strongest", min(options, key=lambda w: (-w["power"], w["slot"]))
     ranked = sorted(options, key=lambda w: (w["power"], w["slot"]))
     return "median", ranked[(len(ranked) - 1) // 2]
+
+
+def _name_key(name: str) -> str:
+    return "".join(ch for ch in name.casefold() if ch.isalnum())
+
+
+def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, str],
+                 names: Collection[str] = BOSS_NAMES,
+                 factor: float = BOSS_HP_FACTOR) -> frozenset[int]:
+    """Living foes named in `names` (spaces, punctuation and case ignored) or whose max HP is at
+    least `factor` x the median max HP of the living foes (`factor` 0 turns the HP rule off)."""
+    foes = [u for u in units if u.get("raw_menu_group_byte") == targets.ENEMY_GROUP and _alive(u)
+            and type(u.get("max_hp")) is int]
+    if not foes:
+        return frozenset()
+    wanted = {_name_key(n) for n in names}
+    middle = median(u["max_hp"] for u in foes)
+    return frozenset(u["object"] for u in foes
+                     if _name_key(mech_names.get(u["object"], "")) in wanted - {""}
+                     or (factor and u["max_hp"] >= factor * middle))
 
 
 def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Policy,
@@ -156,9 +181,10 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
                 per[entry["slot"]] = {t["object"] for t in entry["targets"]}
         reach.append(per)
 
-    def order(foe: Mapping[str, Any]) -> tuple[bool, Fraction, int, int]:
+    def order(foe: Mapping[str, Any]) -> tuple[bool, bool, Fraction, int, int]:
         fraction = Fraction(foe["hp"], foe["max_hp"])
-        return (fraction >= 1, fraction, _distance(here, _tile(foe)), foe["object"])
+        boss_later = policy.non_boss_first and foe["object"] in bosses
+        return (boss_later, fraction >= 1, fraction, _distance(here, _tile(foe)), foe["object"])
 
     for foe in sorted(foes, key=order):
         if hits.get(foe["object"]) == 0:

@@ -224,3 +224,62 @@ def test_standby_is_not_pressed_without_time_for_it(monkeypatch):
     assert result['phase'] == 'declined' and result['moved'] is True
     assert result['standby'] is False and sim.units[0]['counted_as_unmoved'] is True
     assert sim.log[-3:] == ['cross', 'cross', 'cross']
+
+
+class Named(Game):
+    NAMES = {1000: 'Gundam・00', 1001: 'Z Gundam', 2000: 'Mercurius', 2001: 'Taurus'}
+
+    def __init__(self, **flags):
+        super().__init__(**flags)
+        self.weapon_reads: list[int] = []
+        self.units[3].update(tile_x=6, tile_y=8)       # the grunt is in Grenade reach too
+
+    async def read_weapons(self, unit_object):
+        self.weapon_reads.append(unit_object)
+        return {**await super().read_weapons(unit_object), 'mech_name': self.NAMES[unit_object]}
+
+
+def test_named_boss_is_attacked_after_the_grunt_and_names_are_cached():
+    from psp_buddy.policy import parse_policy
+    policy = parse_policy('target non-bosses before bosses')
+    plain = run(plan_act.plan_and_act(Named(), POLICY, 1000))
+    assert plain['plan']['act']['attack']['target_object'] == 2000     # tie broken by object
+    sim, names = Named(), {}
+    result = run(plan_act.plan_and_act(sim, policy, 1000, boss_names=['Mercurius'],
+                                       mech_names=names))
+    assert result['ok'] and result['plan']['act']['attack']['target_object'] == 2001
+    assert names == {2000: 'Mercurius', 2001: 'Taurus'}
+    assert (sim.weapon_reads.count(2000), sim.weapon_reads.count(2001)) == (1, 1)
+    again = Named()
+    run(plan_act.plan_and_act(again, policy, 1000, boss_names=['Mercurius'], mech_names=names))
+    assert {2000, 2001}.isdisjoint(again.weapon_reads)        # foe names come from the cache
+
+
+def test_default_boss_names_apply_when_the_policy_asks_for_non_bosses_first():
+    from psp_buddy.policy import parse_policy
+    result = run(plan_act.plan_and_act(Named(), parse_policy('target non-bosses before bosses'),
+                                       1000))
+    assert result['plan']['act']['attack']['target_object'] == 2001
+
+
+def test_a_pending_dialogue_is_finished_before_the_next_plan():
+    from test_act import ContinueAttack
+    sim = ContinueAttack(continue_skill=False, kills=False)
+    for u in sim.units:
+        u['max_hp'] = u['hp']
+    for w in sim.weapons:
+        w['power'] = POWER[w['name']]
+    sim.screen, sim.lines = 'dialogue', 4
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, settle_first=True))
+    assert result['dialogue_settled'] == {'settled': True, 'presses': 4}
+    assert result['ok'] and result['phase'] == 'fired'
+    assert sim.log[:4] == ['goto(4, 5)', 'circle', 'goto(4, 5)', 'circle']
+
+
+def test_a_settle_that_progresses_but_does_not_finish_waits_for_the_next_call():
+    from test_act import ContinueAttack
+    sim = ContinueAttack(continue_skill=False, kills=False, time_left=75)
+    sim.screen, sim.lines = 'dialogue', 500
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, settle_first=True))
+    assert result['phase'] == 'dialogue_pending' and result['dialogue_settled']['presses'] > 0
+    assert 'start' not in sim.log

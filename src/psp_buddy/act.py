@@ -17,8 +17,10 @@ ALLY_GROUP = 0
 # Debug only: hold a failed stage on screen this long before backing out (to take a screenshot).
 DEBUG_HOLD_SECONDS = float(os.environ.get("PSP_ACT_HOLD", "0"))
 HIT_AND_AWAY_SKILL = 20      # Arios and Baldios pilots (22 Oct live: Move/Standby after attack)
+CONTINUE_ATTACK_SKILL = 22   # "Continue" (24 Oct, Shinn's level-up screen lists SEED, Prevail,
+                             # BattleSpr, Continue, Re-Attack = ids 36, 12, 9, 22, 2); user: a kill
+                             # gives a bonus move-and-attack step (m11live7: the unit stays unmoved)
 RESULT_PRESSES = 6
-FIRE_POLLS = 16
 READ_RETRIES = 6
 ANIMATION_SECONDS = 8.0
 FIRE_NEEDS = 40.0            # seconds Start + result need (about 25 live); less: stop at forecast
@@ -26,6 +28,10 @@ GUARD_SECONDS = 1.0
 MOVE_POLLS = 12
 HIT_POLLS = 5                # reads waiting for a forecast that is not computed yet
 STANDBY_POLLS = 6            # reads waiting for the unit to show as acted after Standby
+DIALOGUE_PRESSES = 40        # Circles through a story dialogue after a kill (user: skip it)
+DIALOGUE_RESERVE = 10.0      # seconds kept back: a longer dialogue is left for the next call
+CIRCLE_AFTER_POLLS = 4       # spend checks after Start before Circling through a dialogue
+                             # (m11live10: 16 checks used the whole act budget, about 4 s each)
 WATCHED = ("hp", "en", "tile_x", "tile_y", "counter_value", "counted_as_unmoved")
 
 
@@ -179,6 +185,9 @@ class _Run:
         self.attack: Mapping[str, object] | None = attack if isinstance(attack, Mapping) else None
         self.state0: Mapping[str, object] = {}
         self.hit_and_away = False
+        self.continue_attack = False
+        self.bonus_action = False
+        self.dialogue_pending = False
         self.weapons: list[dict[str, object]] = []
         self.target_tile: list[int] = []
         self.row = 0                    # attack-menu row (power order)
@@ -247,6 +256,8 @@ class _Run:
             skills = weapons.get("pilot_skills")
             self.hit_and_away = isinstance(skills, list) and any(
                 isinstance(k, Mapping) and k.get("id") == HIT_AND_AWAY_SKILL for k in skills)
+            self.continue_attack = isinstance(skills, list) and any(
+                isinstance(k, Mapping) and k.get("id") == CONTINUE_ATTACK_SKILL for k in skills)
             planned = dict(unit)
             if self.move_to is not None:
                 planned["tile_x"], planned["tile_y"] = self.move_to
@@ -450,7 +461,8 @@ class _Run:
         # No memory reads while the battle scene loads: pausing the CPU then wedged the emulator
         # (live trials act1/act2, 20 Oct).
         await self.io.sleep(ANIMATION_SECONDS)
-        for _ in range(FIRE_POLLS if costs else 0):
+        dialogue = 0
+        for poll in range(CIRCLE_AFTER_POLLS + DIALOGUE_PRESSES if costs else 0):
             state = await self.steady(self.io.state)
             now = _find(_units(state), self.unit_object)
             again = await self.steady(lambda: self.io.read_weapons(self.unit_object))
@@ -461,15 +473,45 @@ class _Run:
                     and new["ammo"] < weapon["ammo"]):
                 spent = True
                 break
+            if poll >= CIRCLE_AFTER_POLLS:
+                # Still nothing spent: a story dialogue can hold the battle (24 Oct live,
+                # m11live9, Trowa); the user asked to skip dialogues, one Circle per line.
+                await self.tap("circle")
+                dialogue += 1
             await self.io.sleep(1.5)
         if not costs:
             # Nothing is spent, so memory cannot confirm Start: the result dialog does (result()).
             self.record("fire", confirmed_by="result_dialog")
             return
         if not spent:
-            raise _Stop("fire", "start_not_confirmed")
+            raise _Stop("fire", "start_not_confirmed", {"dialogue_presses": dialogue})
         self.record("fire", ammo=[weapon.get("ammo"), new.get("ammo")],
-                    en=[unit["en"], now["en"] if now else None])
+                    en=[unit["en"], now["en"] if now else None], dialogue_presses=dialogue)
+
+    async def _through_dialogue(self) -> int:
+        """A kill can start a story dialogue (24 Oct live, m11live7b); the user asked to skip
+        it: Circle until the map cursor moves again, at most DIALOGUE_PRESSES times."""
+        presses = 0
+        while not await self._map_cursor_moves(await self.steady(self.io.state)):
+            if presses >= DIALOGUE_PRESSES:
+                raise _Stop("result", "dialogue_not_finished", {"presses": presses})
+            if self.io.time_left() < DIALOGUE_RESERVE:
+                # The attack is done; the next plan_act finishes the dialogue with a fresh
+                # budget (m11live14: Destiny's kill, pages + a long dialogue, act deadline).
+                self.dialogue_pending = True
+                return presses
+            await self.tap("circle")
+            presses += 1
+            await self.io.sleep(1.5)
+        return presses
+
+    async def _map_cursor_moves(self, state: Mapping[str, object]) -> bool:
+        """The map cursor walks one tile sideways and back (it cannot while a page is up)."""
+        self.guard()
+        return await _cursor_walks(self.io, state)
+
+    def _target_destroyed(self, state: Mapping[str, object]) -> bool:
+        return self.attack is not None and _destroyed(state, self.attack.get("target_object"))
 
     async def result(self) -> None:
         self.current = "result"
@@ -491,6 +533,30 @@ class _Run:
                           "range": len(_reachable(state)), "presses": presses})
             acted = unit is not None and not unit.get("counted_as_unmoved") and (
                 unit.get("counter_value") == 0)
+            if (self.continue_attack and unit is not None and unit.get("counted_as_unmoved")
+                    and self._target_destroyed(state)):
+                # Continue Attack (24 Oct live, m11live7): result pages, then the plain map with
+                # the unit ready again and a stale Move range in memory. Only the map cursor
+                # tells them apart; a Circle on the map would open whatever is under it.
+                if await self._map_cursor_moves(state):
+                    self.bonus_action = True
+                    self.record("result", presses=presses, bonus_action=True,
+                                trace=trace[-8:])
+                    return
+                if presses >= RESULT_PRESSES + DIALOGUE_PRESSES:
+                    raise _Stop("result", "result_not_dismissed",
+                                {"presses": presses, "trace": trace[-8:]})
+                if self.io.time_left() < DIALOGUE_RESERVE:
+                    # m11live15: Heero's withdrawal dialogue after the kill outlasted the act.
+                    # The unit still has its bonus step; the next plan_act settles the screen.
+                    self.bonus_action = self.dialogue_pending = True
+                    self.record("result", presses=presses, bonus_action=True,
+                                dialogue_pending=True, trace=trace[-8:])
+                    return
+                await self.tap("circle")
+                presses += 1
+                await self.io.sleep(1.5)
+                continue
             if acted and (standby or not _post_attack_move(state, unit)):  # type: ignore[arg-type]
                 # After Standby the move range can stay in memory for a moment (22 Oct live).
                 break
@@ -528,7 +594,49 @@ class _Run:
             await self.tap("circle")
             presses += 1
             await self.io.sleep(1.5)
-        self.record("result", presses=presses, post_attack_standby=standby, trace=trace[-8:])
+        # Kills and HP thresholds can start a story dialogue (m11live7b, m11live15): always end
+        # on a proven map.
+        dialogue = await self._through_dialogue()
+        self.record("result", presses=presses, post_attack_standby=standby, trace=trace[-8:],
+                    dialogue_presses=dialogue)
+
+
+async def _cursor_walks(io: ActIO, state: Mapping[str, object]) -> bool:
+    """The map cursor walks one tile sideways and back; it cannot while a page, a dialogue or a
+    menu is up (memory-checked by `goto`)."""
+    cursor = state.get("cursor")
+    if not isinstance(cursor, Mapping) or type(cursor.get("x")) is not int:
+        return False
+    x, y = cursor["x"], cursor["y"]
+    if not (await io.goto([x - 1 if x > 0 else x + 1, y])).get("reached"):
+        return False
+    return bool((await io.goto([x, y])).get("reached"))
+
+
+async def settle_dialogue(io: ActIO, *, presses: int = DIALOGUE_PRESSES,
+                          reserve: float = 0.0) -> dict[str, object]:
+    """Finish a story dialogue an earlier act left pending: Circle until the map cursor walks.
+    Only for a known pending dialogue, never on an unknown screen (Circle would choose)."""
+    done = 0
+    try:
+        while True:
+            if await _cursor_walks(io, await io.state()):
+                return {"settled": True, "presses": done}
+            if done >= presses or io.time_left() < reserve + GUARD_SECONDS:
+                return {"settled": False, "presses": done}
+            await io.press("circle", 2)
+            done += 1
+            await io.sleep(1.5)
+    except ActIOError as exc:
+        return {"settled": False, "presses": done, "reason": f"io_error: {exc}"}
+
+
+def _destroyed(state: Mapping[str, object], target: object) -> bool:
+    units = state.get("units")
+    if not isinstance(units, list):
+        return False
+    found = [u for u in units if isinstance(u, Mapping) and u.get("object") == target]
+    return not found or not _alive(found[0])
 
 
 def _post_attack_move(state: Mapping[str, object], unit: Mapping[str, object]) -> bool:
@@ -592,4 +700,6 @@ async def run_act(request: Mapping[str, object], io: ActIO, *, commit: bool = Fa
 async def _finish(run: _Run, phase: str, io: ActIO) -> dict[str, object]:
     after = _units(await run.steady(io.state))
     return {"ok": True, "phase": phase, "stages": run.stages,
-            "deltas": _deltas(_units(run.state0), after)}
+            "deltas": _deltas(_units(run.state0), after),
+            **({"bonus_action": True} if run.bonus_action else {}),
+            **({"dialogue_pending": True} if run.dialogue_pending else {})}

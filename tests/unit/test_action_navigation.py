@@ -196,6 +196,50 @@ def test_recon_declaration_is_exact(owned, tmp_path, bad):
         setup(owned, tmp_path, bad)
 
 
+SPIRIT_RECON = {'unit': 'Gundam 00', 'actions': ['spirit_recon']}
+
+
+def test_spirit_recon_allows_browsing_but_never_casting(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, SPIRIT_RECON)
+
+    async def scenario():
+        with pytest.raises(ValueError):   # the Spirit entry must be the visible highlight
+            await press(service, frame, 1, 'unit_commands', 'open_spirit',
+                        highlighted_entry='Attack')
+        await press(service, frame, 1, 'unit_commands', 'open_spirit',
+                    highlighted_entry='Spirit')
+        await press(service, frame, 2, 'spirit_pilots', 'spirit_menu_move', button='down')
+        await press(service, frame, 3, 'spirit_pilots', 'spirit_pilot')
+        await press(service, frame, 4, 'spirit_list', 'spirit_menu_move', button='down')
+        for seq, purpose, context, extra in (
+                (5, 'spirit_pilot', 'spirit_list', {}),       # a Circle in the list could cast
+                (5, 'spirit_menu_move', 'spirit_list', dict(button='circle')),
+                (5, 'open_attack', 'unit_commands', dict(highlighted_entry='Attack')),
+                (5, 'open_move', 'unit_commands', dict(highlighted_entry='Move')),
+                (5, 'standby_after_move', 'unit_commands', dict(highlighted_entry='Standby'))):
+            with pytest.raises(ValueError):
+                await press(service, frame, seq, context, purpose, **extra)
+        await press(service, frame, 5, 'spirit_list', 'cancel', button='cross')
+        await press(service, frame, 6, 'spirit_pilots', 'cancel', button='cross')
+    asyncio.run(scenario())
+
+
+def test_spirit_steps_need_the_spirit_recon_declaration(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, RECON)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, 'unit_commands', 'open_spirit',
+                          highlighted_entry='Spirit'))
+
+
+@pytest.mark.parametrize('bad', [
+    {'unit': 'Gundam 00', 'actions': ['spirit_recon', 'attack']},
+    {'unit': 'Gundam 00', 'actions': ['spirit_recon'], 'weapon_name': 'x'},
+])
+def test_spirit_recon_declaration_is_exact(owned, tmp_path, bad):
+    with pytest.raises(ValueError):
+        setup(owned, tmp_path, bad)
+
+
 MOVE_ATTACK = {'unit': 'Z Gundam', 'actions': ['move', 'attack'], 'destination_tile': [14, 15],
                'weapon_name': 'Beam Rifle', 'target_name': 'tile(12,17)'}
 
@@ -377,13 +421,14 @@ def test_state_read_needs_no_screenshot_and_sends_no_input(owned, tmp_path):
 
 
 def test_state_reads_are_bounded_and_need_a_reader(owned, tmp_path):
+    from psp_buddy.info_navigation import MAX_STATE_READS
     service, transport, frame, _ = setup(owned, tmp_path)
 
     async def scenario():
-        for n in range(1, 201):
+        for n in range(1, MAX_STATE_READS + 1):
             await service.execute('state', {'sequence': n})
         with pytest.raises(ValueError):
-            await service.execute('state', {'sequence': 201})
+            await service.execute('state', {'sequence': MAX_STATE_READS + 1})
     asyncio.run(scenario())
     from psp_buddy.info_navigation import InfoNavigation
     bare = InfoNavigation(owned[0], service._adapter, (19, 5), tmp_path / 'e3', service._verify)
@@ -663,3 +708,50 @@ def test_probe_move_reports_a_stalled_walk_without_menu_presses(owned, tmp_path)
     result = asyncio.run(service.execute('probe_move', frame(sequence=1, tile=[5, 6])))
     assert result['ok'] is False and result['reason'] == 'walk_did_not_reach_the_unit'
     assert 'circle' not in sim.log
+
+
+SPIRIT_CAST = {'unit': 'Gundam 00', 'actions': ['spirit_cast_recon'], 'spirit_name': 'Sense'}
+
+
+def test_spirit_cast_recon_casts_only_the_declared_spirit_once(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, SPIRIT_CAST)
+
+    async def scenario():
+        await press(service, frame, 1, 'unit_commands', 'open_spirit',
+                    highlighted_entry='Spirit')
+        await press(service, frame, 2, 'spirit_list', 'spirit_menu_move', button='down')
+        with pytest.raises(ValueError):           # a different row than declared
+            await press(service, frame, 3, 'spirit_list', 'cast_spirit', spirit_name='Focus')
+        with pytest.raises(ValueError):           # Yes only after the declared cast
+            await press(service, frame, 3, 'spirit_confirm', 'confirm_spirit',
+                        highlighted_entry='Yes')
+        await press(service, frame, 3, 'spirit_list', 'cast_spirit', spirit_name='Sense')
+        with pytest.raises(ValueError):           # the highlighted answer must be Yes
+            await press(service, frame, 4, 'spirit_confirm', 'confirm_spirit',
+                        highlighted_entry='No')
+        await press(service, frame, 4, 'spirit_confirm', 'confirm_spirit', highlighted_entry='Yes')
+        for seq, purpose, context, extra in (
+                (5, 'cast_spirit', 'spirit_list', dict(spirit_name='Sense')),
+                (5, 'confirm_spirit', 'spirit_confirm', dict(highlighted_entry='Yes')),
+                (5, 'open_attack', 'unit_commands', dict(highlighted_entry='Attack')),
+                (5, 'open_move', 'unit_commands', dict(highlighted_entry='Move'))):
+            with pytest.raises(ValueError):
+                await press(service, frame, seq, context, purpose, **extra)
+        await press(service, frame, 5, 'spirit_list', 'cancel', button='cross')
+    asyncio.run(scenario())
+
+
+def test_cast_steps_are_refused_in_a_view_only_spirit_recon(owned, tmp_path):
+    service, transport, frame, _ = setup(owned, tmp_path, SPIRIT_RECON)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, 'spirit_list', 'cast_spirit', spirit_name='Sense'))
+
+
+@pytest.mark.parametrize('bad', [
+    {'unit': 'Gundam 00', 'actions': ['spirit_cast_recon']},
+    {'unit': 'Gundam 00', 'actions': ['spirit_cast_recon'], 'spirit_name': ''},
+    {'unit': 'Gundam 00', 'actions': ['spirit_cast_recon'], 'spirit_name': 'Sense', 'x': 1},
+])
+def test_spirit_cast_declaration_is_exact(owned, tmp_path, bad):
+    with pytest.raises(ValueError):
+        setup(owned, tmp_path, bad)

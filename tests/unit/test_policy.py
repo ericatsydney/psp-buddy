@@ -6,6 +6,7 @@ from psp_buddy.policy import parse_policy
 
 def test_empty_uses_explicit_defaults():
     assert parse_policy('') == Policy()
+    assert not Policy().non_boss_first and not Policy().spirit_before_attack
 
 
 @pytest.mark.parametrize('clause,field,value', [
@@ -20,6 +21,8 @@ def test_empty_uses_explicit_defaults():
     ('prefer repair then trust then retreat', 'heal_below_percent', 70),
     ('target damaged enemies before undamaged enemies', 'heal_below_percent', 70),
     ('use medium strength weapons otherwise', 'heal_below_percent', 70),
+    ('target non-bosses before bosses', 'non_boss_first', True),
+    ('use sense then focus before attacking', 'spirit_before_attack', True),
 ])
 def test_supported_clauses(clause, field, value):
     assert getattr(parse_policy(clause), field) == value

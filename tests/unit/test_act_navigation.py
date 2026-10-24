@@ -287,8 +287,21 @@ def test_plan_act_chooses_gates_fires_and_logs(owned, tmp_path):
     assert (tmp_path / 'evidence' / 'damage-log.jsonl').read_text(encoding='utf-8').count('\n') == 1
 
 
+def test_plan_act_accepts_boss_names_and_keeps_foe_names_for_the_trial(owned, tmp_path):
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    answer = asyncio.run(service.execute('plan_act', frame(
+        sequence=1, policy='target non-bosses before bosses', boss_names=['Mercurius'],
+        **request())))
+    assert answer['ok'] is True
+    assert set(service._mech_names) == {u['object'] for u in sim.units
+                                        if u['raw_menu_group_byte'] == 12}
+
+
 @pytest.mark.parametrize('extra', [{'policy': 'win the battle'}, {'policy': 5}, {'bosses': [1]},
-                                   {'unit_object': 5}, {'move_to': [1, 2]}])
+                                   {'unit_object': 5}, {'move_to': [1, 2]},
+                                   {'boss_names': 'Mercurius'}, {'boss_names': ['']},
+                                   {'boss_names': ['x' * 33]}, {'boss_names': ['a'] * 9}])
 def test_plan_act_refuses_bad_requests_before_any_press(owned, tmp_path, extra):
     sim = plan_sim()
     service, adapter, frame = make(owned, tmp_path, sim)
@@ -536,3 +549,121 @@ def test_enemy_phase_can_accept_a_loss_and_reach_the_next_turn(owned, tmp_path):
     data = json.loads((tmp_path / 'evidence' / 'enemy-phase-report.json').read_text(
         encoding='utf-8'))
     assert data['done'] is True and data['losses'] == {str(BASE + 2): 'ally_destroyed'}
+
+
+def spirit_sim():
+    from test_spirit_cast import Spirited
+    sim = Spirited()
+    for unit in sim.units:
+        unit['object'] += BASE
+    return sim
+
+
+def test_plan_act_casts_sense_through_the_spirit_readers_and_reports_it(owned, tmp_path):
+    import json
+    sim = spirit_sim()
+
+    async def spirits(n, obj):
+        return await sim.spirits(obj)
+
+    async def cursor_bytes():
+        return await sim.spirit_cursor_bytes()
+
+    async def command_menu():
+        return await sim.command_menu()
+
+    service, adapter, frame = make(owned, tmp_path, sim, read_spirits=spirits,
+                                   read_spirit_cursor_bytes=cursor_bytes,
+                                   read_command_menu=command_menu)
+    answer = asyncio.run(service.execute('plan_act', frame(
+        sequence=1, policy='use sense then focus before attacking', **request())))
+    assert answer['ok'] is True and answer['spirit']['status'] == 'cast'
+    assert answer['spirit']['spirit'] == 'Sense' and sim.sp == 35
+    assert adapter.sent[:5] == ['circle', 'down', 'down', 'circle', 'down']
+    report = json.loads((tmp_path / 'evidence' / 'turn-report.json').read_text(encoding='utf-8'))
+    assert report['entries'][0]['spirit']['sp'] == [55, 35]
+
+
+def test_plan_act_without_spirit_readers_skips_the_spirit_and_attacks(owned, tmp_path):
+    sim = spirit_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    answer = asyncio.run(service.execute('plan_act', frame(
+        sequence=1, policy='use sense then focus before attacking', **request())))
+    assert answer['spirit']['status'] == 'skipped'
+    assert answer['spirit']['reason'].startswith('spirits_unreadable')
+    assert answer['ok'] is True and sim.sp == 55
+
+
+def test_a_bonus_action_permits_only_result_and_cancel_presses_until_the_next_plan(owned,
+                                                                                   tmp_path):
+    from test_act import ContinueAttack
+    sim = ContinueAttack()
+    for unit in sim.units:
+        unit['object'] += BASE
+        unit['max_hp'] = unit['hp']
+    for weapon, power in zip(sim.weapons, (1000, 2000, 3000), strict=True):
+        weapon['power'] = power
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    def press(sequence, context, purpose, button):
+        return service.execute('press', frame(context, sequence=sequence, button=button,
+                                              duration=2, purpose=purpose))
+
+    async def scenario():
+        with pytest.raises(NavigationRefused):                  # no bonus yet
+            await press(1, 'result', 'dismiss_result', 'circle')
+        answer = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert answer['ok'] and answer['outcome']['bonus_action'] is True
+        sent = len(adapter.sent)
+        await press(2, 'result', 'dismiss_result', 'circle')    # user, 24 Oct: look first
+        await press(3, 'weapon_list', 'cancel', 'cross')
+        assert adapter.sent[sent:] == ['circle', 'cross']
+        with pytest.raises(NavigationRefused):                  # still no other battle press
+            await press(4, 'unit_commands', 'open_move', 'circle')
+    asyncio.run(scenario())
+
+
+def test_a_pending_dialogue_makes_the_next_plan_act_settle_it_first(owned, tmp_path,
+                                                                   monkeypatch):
+    from psp_buddy import plan_act
+    seen = []
+    answers = [{'ok': True, 'phase': 'fired', 'outcome': {'dialogue_pending': True}},
+               {'ok': True, 'phase': 'fired', 'outcome': {},
+                'dialogue_settled': {'settled': True, 'presses': 3}},
+               {'ok': True, 'phase': 'fired', 'outcome': {}}]
+
+    async def fake(io, policy, unit_object, **kw):
+        seen.append(kw['settle_first'])
+        return answers[len(seen) - 1]
+
+    monkeypatch.setattr(plan_act, 'plan_and_act', fake)
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        for n in (1, 2, 3):
+            await service.execute('plan_act', frame(sequence=n, policy='', **request()))
+    asyncio.run(scenario())
+    assert seen == [False, True, False]
+
+
+def test_end_turn_open_settles_a_pending_dialogue_first(owned, tmp_path, monkeypatch):
+    # Review (24 Oct): the turn's last unit can leave a story dialogue pending.
+    from psp_buddy import act as act_macro
+    from psp_buddy import end_turn
+    calls = []
+
+    async def settle(io, **kw):
+        calls.append('settle')
+        return {'settled': False, 'presses': 40}
+
+    async def open_menu(io, state):
+        calls.append('open')
+        return {'ok': True, 'phase': 'menu_open'}
+
+    monkeypatch.setattr(act_macro, 'settle_dialogue', settle)
+    monkeypatch.setattr(end_turn, 'open_menu', open_menu)
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+    service._turn_done, service._dialogue_pending = True, True
+    answer = asyncio.run(service.execute('end_turn', frame(sequence=1, phase='open')))
+    assert answer['ok'] is False and answer['reason'] == 'dialogue_not_finished'
+    assert calls == ['settle']

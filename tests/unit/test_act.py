@@ -214,7 +214,7 @@ def test_move_and_attack_runs_every_stage_in_order():
         'plan', 'select', 'move', 'attack_menu', 'weapon', 'target', 'forecast', 'fire', 'result']
     assert sim.log == ['goto(5, 5)', 'circle', 'circle', 'goto(5, 7)', 'circle',
                        'circle', 'down', 'down', 'circle', 'goto(5, 9)', 'circle', 'start',
-                       'circle']
+                       'circle', 'goto(4, 9)', 'goto(5, 9)']    # last: the map proven
     me = sim.units[0]
     assert (me['tile_x'], me['tile_y']) == (5, 7) and me['en'] == 98
     assert sim.weapons[2]['ammo'] == 8 and me['counted_as_unmoved'] is False
@@ -337,12 +337,15 @@ def test_target_not_hittable_backs_out():
     assert 'start' not in sim.log and sim.log[-2:] == ['cross', 'cross']
 
 
-def test_start_that_changes_nothing_is_reported_without_more_input():
+def test_start_that_changes_nothing_is_reported_after_bounded_circles():
+    # Only Circle follows (24 Oct: a story dialogue can hold the battle); fire() checked the
+    # forecast from memory before Start, and Circle there confirms the same attack.
     sim = SimGame(start_ignored=True)
     result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
     assert result['ok'] is False and result['stage'] == 'fire'
     assert result['reason'] == 'start_not_confirmed' and sim.log.count('start') == 1
-    assert sim.log[-1] == 'start'
+    after = sim.log[sim.log.index('start') + 1:]
+    assert set(after) == {'circle'} and len(after) == act.DIALOGUE_PRESSES
 
 
 def test_result_dialog_dismissal_is_bounded():
@@ -365,7 +368,7 @@ def test_only_known_buttons_and_start_only_after_forecast():
     run(act.run_act(MOVE_ATTACK, sim, commit=True))
     first_start = sim.log.index('start')
     assert sim.log[first_start - 1] == 'circle'
-    assert set(sim.log) <= ALLOWED | {'goto(5, 5)', 'goto(5, 7)', 'goto(5, 9)'}
+    assert set(sim.log) <= ALLOWED | {'goto(5, 5)', 'goto(5, 7)', 'goto(5, 9)', 'goto(4, 9)'}
 
 
 def test_menu_row_decoder_accepts_only_plausible_list_cursors():
@@ -566,7 +569,7 @@ def test_hit_and_away_menu_is_answered_with_standby():
     assert result['ok'] is True and result['phase'] == 'done'
     last = result['stages'][-1]
     assert last['stage'] == 'result' and last['facts']['post_attack_standby'] is True
-    assert sim.log[-3:] == ['cross', 'down', 'circle']
+    assert sim.log[-5:] == ['cross', 'down', 'circle', 'goto(4, 9)', 'goto(5, 9)']  # map proof
     assert sim.screen == 'map' and sim.units[0]['counted_as_unmoved'] is False
 
 
@@ -655,7 +658,8 @@ def test_unit_with_the_hit_and_away_skill_is_answered_with_down_and_circle():
     result = run(act.run_act(request_, sim, commit=True))
     assert result['ok'] is True and result['phase'] == 'done'
     assert result['stages'][-1]['facts']['post_attack_standby'] is True
-    assert sim.log[-2:] == ['down', 'circle'] and 'cross' not in sim.log
+    assert sim.log[-4:] == ['down', 'circle', 'goto(4, 9)', 'goto(5, 9)']
+    assert 'cross' not in sim.log
     assert sim.screen == 'map' and sim.units[0]['counted_as_unmoved'] is False
 
 
@@ -664,3 +668,167 @@ def test_unit_without_the_skill_never_gets_the_blind_down_press():
     request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
     run(act.run_act(request_, sim, commit=True))
     assert sim.log.count('down') == 3                    # attack entry + two weapon rows
+
+
+
+class ContinueAttack(SimGame):
+    """User, 24 Oct: Destiny's pilot has Continue (skill id 22, level-up screen); a kill gives
+    a bonus move-and-attack step. Live m11live7 screens: Get Result (EXP), then an item page, then
+    the plain map with the unit still unmoved. The map cursor cannot move while a page is up, and
+    a stale Move range stays in memory throughout."""
+
+    def __init__(self, **flags):
+        super().__init__(**flags)
+        self.pages = 0
+
+    async def read_weapons(self, unit_object):
+        answer = await super().read_weapons(unit_object)
+        if self.flags.get('continue_skill', True):
+            answer['pilot_skills'] = [*answer['pilot_skills'], {'id': 22, 'level': 1}]
+        return answer
+
+    def killed(self):
+        return self.flags.get('continue_skill', True) and self.flags.get('kills', True)
+
+    async def press(self, button, frames=2):
+        if self.screen == 'result' and button == 'circle' and self.killed():
+            self.log.append(button)
+            self.pages += 1
+            if self.pages >= 2:
+                self.screen = 'map'
+                if self.flags.get('dialogue'):              # m11live15: Heero withdraws
+                    self.screen, self.lines = 'dialogue', self.flags['dialogue']
+            return
+        if self.screen == 'dialogue' and button == 'circle':
+            self.log.append(button)
+            self.lines -= 1
+            if self.lines <= 0:
+                self.screen = 'map'
+            return
+        was = self.screen
+        await super().press(button, frames)
+        if was == 'result' and self.screen == 'map' and self.flags.get('dialogue'):
+            self.screen, self.lines = 'dialogue', self.flags['dialogue']   # story after a kill
+
+    async def goto(self, tile):
+        if self.screen in ('result', 'dialogue'):   # a page or a dialogue: the cursor is locked
+            self.log.append(f'goto{tuple(tile)}')
+            return {'reached': False, 'cursor': {'x': self.cursor[0], 'y': self.cursor[1]}}
+        return await super().goto(tile)
+
+    async def state(self):
+        answer = await super().state()
+        if self.screen in ('result', 'map') and self.flags.get('kills', True) and self.weapon:
+            foe = next(u for u in self.units if u['raw_menu_group_byte'] == 12)
+            foe['hp'] = 0
+            answer = await super().state()
+            if self.flags.get('continue_skill', True):          # seen live after its kills
+                ax, ay = self.acting['tile_x'], self.acting['tile_y']
+                answer['reachable'] = [[ax + dx, ay + dy, abs(dx) + abs(dy)]     # stale range
+                                       for dx in range(-3, 4) for dy in range(-3, 4)
+                                       if 0 < abs(dx) + abs(dy) <= 3]
+        return answer
+
+
+def test_a_kill_by_a_continue_attack_pilot_dismisses_its_pages_then_stops_on_the_map():
+    sim = ContinueAttack()
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    assert result['bonus_action'] is True
+    after = sim.log[sim.log.index('start') + 1:]
+    assert after.count('circle') == 2 and after[-1].startswith('goto')   # map proven, no Circle
+    assert sim.units[0]['counted_as_unmoved'] is True and sim.screen == 'map'
+
+
+def test_a_kill_without_the_skill_is_dismissed_and_the_map_proven():
+    sim = ContinueAttack(continue_skill=False)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and 'bonus_action' not in result
+    after = sim.log[sim.log.index('start') + 1:]
+    assert after == ['circle', 'goto(4, 9)', 'goto(5, 9)']
+    assert sim.units[0]['counted_as_unmoved'] is False
+
+
+def test_a_story_dialogue_after_a_kill_is_skipped_with_circle():
+    # User, 24 Oct: "Skip the dialogue for me" (m11live7b: Quatre/Trowa after Destiny's kill).
+    sim = ContinueAttack(continue_skill=False, dialogue=3)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and sim.screen == 'map'
+    after = sim.log[sim.log.index('start') + 1:]
+    assert after.count('circle') == 4 and after[-2:] == ['goto(4, 9)', 'goto(5, 9)']
+    assert result['stages'][-1]['facts']['dialogue_presses'] == 3
+
+
+def test_a_dialogue_that_never_ends_stops_the_act():
+    sim = ContinueAttack(continue_skill=False, dialogue=500)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['reason'] == 'dialogue_not_finished'
+    assert sim.log.count('circle') < 60
+
+
+class PreBattleDialogue(SimGame):
+    """24 Oct live (m11live9): Baldios attacked Trowa's unit; after Start a story dialogue played on
+    the map before the battle, so nothing was spent until it was advanced with Circle."""
+
+    async def press(self, button, frames=2):
+        if self.screen == 'forecast' and button == 'start':
+            self.log.append(button)
+            self.screen, self.lines = 'dialogue', self.flags.get('lines', 5)
+            return
+        if self.screen == 'dialogue' and button == 'circle':
+            self.log.append(button)
+            self.lines -= 1
+            if self.lines <= 0:
+                self.weapon['ammo'] -= 1
+                self.screen, self.combat_reads = 'combat', 0
+            return
+        await super().press(button, frames)
+
+
+def test_a_story_dialogue_before_the_battle_is_skipped_with_circle():
+    sim = PreBattleDialogue()
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    after = sim.log[sim.log.index('start') + 1:]
+    assert after.count('circle') == 5 + 1                  # five lines, then the result dialog
+    fire = next(s for s in result['stages'] if s['stage'] == 'fire')['facts']
+    assert fire['dialogue_presses'] == 5
+
+
+def test_a_pre_battle_dialogue_that_never_ends_stops_at_fire():
+    sim = PreBattleDialogue(lines=500)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['stage'] == 'fire'
+    assert result['reason'] == 'start_not_confirmed' and sim.log.count('circle') < 60
+
+
+def test_a_dialogue_longer_than_the_act_budget_is_left_pending_not_stopped():
+    sim = ContinueAttack(continue_skill=False, dialogue=500, time_left=120)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and result['dialogue_pending'] is True
+    assert sim.screen == 'dialogue' and sim.units[0]['counted_as_unmoved'] is False
+
+
+def test_settle_dialogue_circles_until_the_map_cursor_moves():
+    sim = ContinueAttack(continue_skill=False)
+    sim.screen, sim.lines = 'dialogue', 3
+    answer = run(act.settle_dialogue(sim))
+    assert answer == {'settled': True, 'presses': 3}
+    assert sim.screen == 'map' and sim.log.count('circle') == 3
+
+
+
+def test_a_long_dialogue_on_the_continue_path_is_left_pending():
+    sim = ContinueAttack(dialogue=500, time_left=120)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True
+    assert result['bonus_action'] is True and result['dialogue_pending'] is True
+    assert sim.screen == 'dialogue' and sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_a_dialogue_after_an_attack_without_a_kill_is_skipped_too():
+    # Review (24 Oct): Heero withdrew on an HP threshold, not a kill (m11live15).
+    sim = ContinueAttack(continue_skill=False, kills=False, dialogue=3)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True and sim.screen == 'map'
+    assert result['stages'][-1]['facts']['dialogue_presses'] == 3

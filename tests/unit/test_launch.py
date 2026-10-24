@@ -395,3 +395,29 @@ def test_static_runtime_relative_active_paths_allow_trial_writes(prepared_env, t
     (active / 'SYSTEM/ppsspp.ini').write_text('new settings')
     session.close()
     session.verify_sources()
+
+
+def test_a_hash_checked_checkpoint_is_loaded_from_the_trial_folder_only(prepared_env, tmp_path):
+    # User, 24 Oct: save once before the enemy turn, then replay that phase from the copy. The
+    # trial memstick seeds the next launch, so the checkpoint never goes into its slot files.
+    import hashlib
+    launcher, config, system, inspector, process = prepared_env
+    checkpoint = tmp_path / 'checkpoints' / 'turn7-done.ppst'
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b'turn 7 done')
+    digest = hashlib.sha256(b'turn 7 done').hexdigest()
+    prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                                system_root=system, checkpoint=(checkpoint, digest))
+    slot = prepared.memstick_root / 'PSP' / 'PPSSPP_STATE' / 'ULJS00460_1.01_1.ppst'
+    assert slot.read_bytes() != b'turn 7 done'                  # the slot copy is unchanged
+    state_arg = next(a for a in prepared.arguments if a.startswith('--state='))
+    loaded = Path(state_arg.removeprefix('--state='))
+    assert loaded.read_bytes() == b'turn 7 done'
+    assert prepared.memstick_root not in loaded.parents
+    with pytest.raises(ValueError, match='checkpoint'):
+        launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst', system_root=system,
+                         checkpoint=(checkpoint, '0' * 64))
+    inside = config.save_roots[3] / 'ULJS00460_1.01_1.ppst'      # never from a save root
+    with pytest.raises(ValueError, match='checkpoint'):
+        launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst', system_root=system,
+                         checkpoint=(inside, hashlib.sha256(inside.read_bytes()).hexdigest()))

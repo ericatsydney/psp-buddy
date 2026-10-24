@@ -188,6 +188,8 @@ class Policy:
     common_type_min_count: int = 4
     max_retries: int = 3
     stop_on_map_clear: bool = True
+    non_boss_first: bool = False
+    spirit_before_attack: bool = False
 
     def __post_init__(self) -> None:
         if type(self.max_retries) is not int or not 0 <= self.max_retries <= 3:

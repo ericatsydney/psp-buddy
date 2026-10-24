@@ -26,7 +26,7 @@ from .weapons import RAM_END, RAM_START
 MAX_TAPS = 16
 MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
-MAX_STATE_READS = 200
+MAX_STATE_READS = 600              # memory-only; M11 cursor and dialogue checks (m11live17)
 MAX_WEAPON_READS = 200
 MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
@@ -45,7 +45,8 @@ MAX_RESPONSE_BYTES = 15000          # the mailbox limit is 16384 including its e
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
 CONTEXTS = ("map", "unit_commands", "info", "move_range", "weapon_list", "target_select",
-            "attack_forecast", "result", "system_menu", "enemy_phase")
+            "attack_forecast", "result", "system_menu", "enemy_phase", "spirit_pilots",
+            "spirit_list", "spirit_confirm")
 ACTION_CONTEXTS = ("unit_commands", "move_range", "weapon_list", "target_select",
                    "attack_forecast")
 # purpose -> (allowed buttons, allowed screen contexts, extra required key)
@@ -55,7 +56,8 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "open_unit_menu": (("circle",), ("map",), "cursor_tile"),
     "open_info": (("circle",), ("unit_commands",), "highlighted_entry"),
     "cancel": (("cross",), ("info", "move_range", "weapon_list", "target_select",
-                            "attack_forecast", "system_menu"), None),
+                            "attack_forecast", "system_menu", "spirit_pilots",
+                            "spirit_list", "spirit_confirm"), None),
     "open_move": (("circle",), ("unit_commands",), "highlighted_entry"),
     "move_cursor": (DIRECTIONS, ("move_range",), None),
     "confirm_move": (("circle",), ("move_range",), "destination_tile"),
@@ -70,14 +72,26 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "system_menu_move": (DIRECTIONS, ("system_menu",), None),
     "end_turn": (("circle",), ("system_menu",), "highlighted_entry"),
     "advance_dialog": (("circle",), ("enemy_phase",), None),
+    # View-only Spirit recon: a Circle in the spirit list could cast, so none is accepted there.
+    "open_spirit": (("circle",), ("unit_commands",), "highlighted_entry"),
+    "spirit_pilot": (("circle",), ("spirit_pilots",), None),
+    "spirit_menu_move": (DIRECTIONS, ("spirit_pilots", "spirit_list"), None),
+    # Cast recon only: one Circle on the declared spirit, then Yes if the game asks.
+    "cast_spirit": (("circle",), ("spirit_list",), "spirit_name"),
+    "confirm_spirit": (("circle",), ("spirit_confirm",), "highlighted_entry"),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
                    "select_target", "choose_target", "confirm_attack", "standby_after_move",
                   "dismiss_result", "open_system_menu", "system_menu_move", "end_turn",
-                  "advance_dialog")
+                  "advance_dialog", "open_spirit", "spirit_pilot", "spirit_menu_move",
+                  "cast_spirit", "confirm_spirit")
+SPIRIT_PURPOSES = ("open_spirit", "spirit_pilot", "spirit_menu_move", "cast_spirit",
+                   "confirm_spirit")
+CAST_PURPOSES = ("cast_spirit", "confirm_spirit")
+BONUS_PURPOSES = ("dismiss_result", "cancel")
 SYSTEM_PURPOSES = ("open_system_menu", "system_menu_move", "end_turn", "advance_dialog")
 ENTRIES = {"open_info": "Info", "open_move": "Move", "open_attack": "Attack",
-           "standby_after_move": "Standby"}
+           "standby_after_move": "Standby", "open_spirit": "Spirit"}
 BASE_KEYS = {"sequence", "screen_file", "screen_sha256", "context"}
 FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(?:jpg|jpeg|png)", re.I)
 
@@ -107,6 +121,9 @@ class InfoNavigation:
         read_hit: Callable[[int], Awaitable[Mapping[str, object]]] | None = None,
         read_cursor: Callable[[], Awaitable[tuple[int, int]]] | None = None,
         read_menu_row: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
+        read_spirits: Callable[[int, int], Awaitable[Mapping[str, object]]] | None = None,
+        read_spirit_cursor_bytes: Callable[[], Awaitable[list[int]]] | None = None,
+        read_command_menu: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
         act_time_scale: float = 1.0,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
@@ -133,6 +150,10 @@ class InfoNavigation:
         self._hit_reads = 0
         self._read_cursor = read_cursor
         self._read_menu_row = read_menu_row
+        self._read_spirits = read_spirits
+        self._spirit_reads = 0
+        self._read_spirit_cursor_bytes = read_spirit_cursor_bytes
+        self._read_command_menu = read_command_menu
         self._act_scale = act_time_scale
         self._acts = 0
         self._act_presses = 0
@@ -154,6 +175,9 @@ class InfoNavigation:
         self._occupied = None if occupied_tiles is None else {
             (int(x), int(y)) for x, y in occupied_tiles}
         self._menu_open = False
+        self._mech_names: dict[int, str] = {}     # foe mech names: static within a battle
+        self._bonus_unit: int | None = None       # the last plan_act ended on a bonus action
+        self._dialogue_pending = False            # the last act left a story dialogue up
         self._advances = 0
         self._dumps = 0
         self._done: set[str] = set()
@@ -180,7 +204,7 @@ class InfoNavigation:
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
                            ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"],
-                           ["act"])
+                           ["act"], ["spirit_recon"], ["spirit_cast_recon"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -195,6 +219,11 @@ class InfoNavigation:
                 item = value.get(key)
                 if not isinstance(item, str) or not item or len(item) > 64:
                     raise ValueError("declaration needs weapon_name and target_name")
+        if "spirit_cast_recon" in actions:
+            wanted.add("spirit_name")
+            name = value.get("spirit_name")
+            if not isinstance(name, str) or not 1 <= len(name) <= 32:
+                raise ValueError("declaration needs spirit_name")
         if "end_turn" in actions:
             wanted.add("entry_label")
             label = value.get("entry_label")
@@ -237,6 +266,25 @@ class InfoNavigation:
         assert isinstance(actions, list)
         if purpose in SYSTEM_PURPOSES:
             self._check_system(purpose, arguments, actions)
+            return
+        casting = "spirit_cast_recon" in actions
+        if ("spirit_recon" in actions or casting) != (purpose in SPIRIT_PURPOSES):
+            raise ValueError("a Spirit recon trial permits only the Spirit menu")
+        if purpose in CAST_PURPOSES:
+            if not casting:
+                raise ValueError("casting is not declared for this trial")
+            if purpose == "cast_spirit" and (arguments["spirit_name"] != decl["spirit_name"]
+                                             or "spirit_cast" in self._done):
+                raise ValueError("cast does not match the declaration or was already done")
+            if purpose == "confirm_spirit" and (arguments["highlighted_entry"] != "Yes"
+                                                or "spirit_cast" not in self._done
+                                                or "spirit_confirm" in self._done):
+                raise ValueError("Yes is permitted once, right after the declared cast")
+        if purpose in SPIRIT_PURPOSES:
+            return
+        if "act" in actions and self._bonus_unit is not None and purpose in BONUS_PURPOSES:
+            # A Continue Attack kill left the game on its result screens (24 Oct live): the agent
+            # looks at each screen and dismisses or backs out one press at a time.
             return
         if ("system_recon" in actions or "end_turn" in actions or "probe" in actions
                 or "act" in actions):
@@ -512,7 +560,7 @@ class InfoNavigation:
         decl = self._declaration
         required = BASE_KEYS | {"unit_object", "policy"}
         if (decl is None or decl["actions"] != ["act"] or not required <= keys
-                or not keys <= required | {"bosses", "min_hit"}
+                or not keys <= required | {"bosses", "min_hit", "boss_names"}
                 or self._read_state is None or self._read_weapons is None
                 or self._read_hit is None or self._read_cursor is None
                 or self._read_menu_row is None or self._map_size is None):
@@ -526,6 +574,10 @@ class InfoNavigation:
                 or not isinstance(bosses, list) or len(bosses) > 8
                 or not all(type(b) is int and RAM_START <= b < RAM_END for b in bosses)):
             raise ValueError("plan_act needs a unit, a policy text and optional bosses")
+        names = arguments.get("boss_names", [])
+        if (not isinstance(names, list) or len(names) > 8
+                or not all(isinstance(n, str) and 1 <= len(n) <= 32 for n in names)):
+            raise ValueError("boss_names must be up to 8 names of 1 to 32 characters")
         min_hit = arguments.get("min_hit", plan_act.MIN_HIT)
         if type(min_hit) is not int or not 1 <= min_hit <= 100:
             raise ValueError("min_hit must be a whole number from 1 to 100")
@@ -546,11 +598,22 @@ class InfoNavigation:
         assert type(unit_object) is int and isinstance(text, str)
         bosses = arguments.get("bosses", [])
         assert isinstance(bosses, list)
+        names = arguments.get("boss_names")
+        assert names is None or isinstance(names, list)
         outcome: dict[str, object] = await plan_act.plan_and_act(
             self._act_io(), parse_policy(text), unit_object, bosses=frozenset(bosses),
             min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
-            damage_log=self._evidence / "damage-log.jsonl")
+            damage_log=self._evidence / "damage-log.jsonl", boss_names=names,
+            mech_names=self._mech_names, settle_first=self._dialogue_pending)
         self._act_pending = None
+        done = outcome.get("outcome")
+        self._bonus_unit = (unit_object if isinstance(done, Mapping) and done.get("bonus_action")
+                            else None)
+        settled = outcome.get("dialogue_settled")
+        self._dialogue_pending = bool(
+            (isinstance(done, Mapping) and done.get("dialogue_pending"))
+            or (self._dialogue_pending and not (isinstance(settled, Mapping)
+                                                and settled.get("settled"))))
         self._stale = {p.name for p in self._root.iterdir()} if self._root.is_dir() else set()
         self._turn.record(unit_object, outcome)
         error = self._write_turn_report()
@@ -589,6 +652,13 @@ class InfoNavigation:
         self._act_deadline = time.monotonic() + ACT_SECONDS
         io = self._act_io()
         if arguments["phase"] == "open":
+            if self._dialogue_pending:
+                # The turn's last act left a story dialogue up: finish it before the menu.
+                settled = await act_macro.settle_dialogue(io)
+                if not settled.get("settled"):
+                    return {"ok": False, "phase": "stopped", "reason": "dialogue_not_finished",
+                            "dialogue_settled": settled}
+                self._dialogue_pending = False
             try:
                 start = await io.state()
             except act_macro.ActIOError as exc:
@@ -684,6 +754,26 @@ class InfoNavigation:
             async def menu_row(self) -> tuple[int, int] | None:
                 assert nav._read_menu_row is not None
                 result: tuple[int, int] | None = await nav._act_read(nav._read_menu_row())
+                return result
+
+            async def spirits(self, unit_object: int) -> Mapping[str, Any]:
+                if nav._read_spirits is None:
+                    raise act_macro.ActIOError("no spirit reader in this trial")
+                nav._spirit_reads += 1
+                result: Mapping[str, Any] = await nav._act_read(
+                    nav._read_spirits(nav._spirit_reads, unit_object))
+                return result
+
+            async def spirit_cursor_bytes(self) -> list[int]:
+                if nav._read_spirit_cursor_bytes is None:
+                    raise act_macro.ActIOError("no spirit cursor reader in this trial")
+                result: list[int] = await nav._act_read(nav._read_spirit_cursor_bytes())
+                return result
+
+            async def command_menu(self) -> tuple[int, int] | None:
+                if nav._read_command_menu is None:
+                    raise act_macro.ActIOError("no command menu reader in this trial")
+                result: tuple[int, int] | None = await nav._act_read(nav._read_command_menu())
                 return result
 
             async def sleep(self, seconds: float) -> None:
@@ -968,7 +1058,11 @@ class InfoNavigation:
             receipt = await self._adapter.press(
                 str(arguments["button"]), int(arguments["duration"]))
             self._stale = {p.name for p in self._root.iterdir()}
-            if purpose == "confirm_move":
+            if purpose == "cast_spirit":
+                self._done.add("spirit_cast")
+            elif purpose == "confirm_spirit":
+                self._done.add("spirit_confirm")
+            elif purpose == "confirm_move":
                 self._done.add("move")
             elif purpose == "standby_after_move":
                 self._done.add("standby")

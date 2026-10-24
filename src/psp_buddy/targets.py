@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 HOVER_HIT_ADDRESS = 0x08ED055C   # two s32; 18 Oct runs matched the on-screen HIT%
 NO_TARGET = -10000
 MAX_RAW_HIT = 200
+SURE_HIT_RAW = 400
 ENEMY_GROUP = 12          # raw_menu_group_byte: 0 = ally, 4 = third force (HIT 0%), 12 = foe
 
 
@@ -87,4 +88,6 @@ def decode_hover_hit(blob: bytes) -> dict[str, object]:
         return {"state": "hit", "hit": first}
     if first <= MAX_RAW_HIT:         # the uncapped chance (22 Oct live: 105); the screen shows 100
         return {"state": "hit", "hit": 100, "raw": first}
+    if first == SURE_HIT_RAW:        # Sense (Aim) active, 24 Oct live (m11live1)
+        return {"state": "hit", "hit": 100, "raw": first, "sure_hit": True}
     return {"state": "unknown", "hit": None, "raw": [first, second]}

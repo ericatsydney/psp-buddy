@@ -14,6 +14,10 @@ CLAUSES = (
     (r"common types have more than (\d+) instances", "common_type_min_count"),
     (r"retry at most (\d+) times", "max_retries"),
 )
+FLAG_CLAUSES = {
+    "target non-bosses before bosses": "non_boss_first",
+    "use sense then focus before attacking": "spirit_before_attack",
+}
 FIXED_CLAUSES = (
     "stop on map clear", "prefer repair then trust then retreat",
     "target damaged enemies before undamaged enemies", "use medium strength weapons otherwise",
@@ -23,9 +27,13 @@ FIXED_CLAUSES = (
 def parse_policy(text: str) -> Policy:
     """Accept semicolon/newline-separated CLAUSES and FIXED_CLAUSES only."""
     settings: dict[str, int] = {}
+    flags: dict[str, bool] = {}
     for raw in re.split(r"[;\n]", text):
         clause = " ".join(raw.lower().strip().rstrip(".").split())
         if not clause or clause in FIXED_CLAUSES:
+            continue
+        if clause in FLAG_CLAUSES:
+            flags[FLAG_CLAUSES[clause]] = True
             continue
         for pattern, field in CLAUSES:
             match = re.fullmatch(pattern, clause)
@@ -55,4 +63,5 @@ def parse_policy(text: str) -> Policy:
             "strongest_boss_above_percent", defaults.strongest_boss_above_percent),
         common_type_min_count=settings.get("common_type_min_count", defaults.common_type_min_count),
         max_retries=settings.get("max_retries", defaults.max_retries),
+        **flags,
     )

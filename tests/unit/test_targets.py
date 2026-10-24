@@ -111,5 +111,9 @@ def test_hover_hit_decoding():
                                                               "raw": 105}
     assert decode_hover_hit(struct.pack("<ii", 100, 100)) == {"state": "hit", "hit": 100}
     assert decode_hover_hit(struct.pack("<ii", 201, 201))["state"] == "unknown"
+    # 24 Oct live (m11live1): with Sense (Aim) active the field reads 400, a sure hit.
+    assert decode_hover_hit(struct.pack("<ii", 400, 400)) == {"state": "hit", "hit": 100,
+                                                              "raw": 400, "sure_hit": True}
+    assert decode_hover_hit(struct.pack("<ii", 399, 399))["state"] == "unknown"
     with pytest.raises(ValueError):
         decode_hover_hit(b"\0" * 4)
