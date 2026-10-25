@@ -72,18 +72,40 @@ class WindowsInspector:
                                row["CreationDate"])
 
     def listeners(self, port: int) -> tuple[tuple[str, int], ...]:
-        rows = self._query(
-            "ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -State Listen | "
-            f"Where-Object LocalPort -eq {port} | Select-Object LocalAddress,OwningProcess)"
-        )
-        if not isinstance(rows, list):
-            raise ValueError("listener inventory unavailable")
-        result = []
-        for row in rows:
-            if (not isinstance(row, dict) or not isinstance(row.get("LocalAddress"), str)
-                    or type(row.get("OwningProcess")) is not int):
-                raise ValueError("listener identity unavailable")
-            result.append((row["LocalAddress"], row["OwningProcess"]))
+        """Listening TCP sockets on `port` as (address, pid), IPv4 then IPv6.
+
+        `netstat -ano` (25 Oct: Get-NetTCPConnection took 11-15+ s, so the backup receipt went
+        stale before launch). Fails closed: a failed run, a TCP row that does not parse, or an
+        output with no LISTENING row at all (a localized state name) is an error, never "none".
+        """
+        if os.name != "nt":
+            raise ValueError("Windows process inspection unavailable")
+        result: list[tuple[str, int]] = []
+        for protocol in ("TCP", "TCPv6"):
+            try:
+                output = subprocess.run(
+                    ["netstat", "-ano", "-p", protocol], check=True, capture_output=True,
+                    text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW,
+                ).stdout
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ValueError("listener inventory unavailable") from exc
+            listening = 0
+            for line in output.splitlines():
+                fields = line.split()
+                if not fields or fields[0] != "TCP":
+                    continue
+                if len(fields) != 5 or not fields[4].isdigit():
+                    raise ValueError("listener identity unavailable")
+                address, colon, local_port = fields[1].rpartition(":")
+                if not colon or not address or not local_port.isdigit():
+                    raise ValueError("listener identity unavailable")
+                if fields[3] != "LISTENING":
+                    continue
+                listening += 1
+                if int(local_port) == port:
+                    result.append((address.removeprefix("[").removesuffix("]"), int(fields[4])))
+            if not listening:
+                raise ValueError("listener inventory unavailable")
         return tuple(result)
 
 

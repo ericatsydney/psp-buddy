@@ -142,8 +142,12 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        damage_log: Path | None = None,
                        boss_names: Collection[str] | None = None,
                        mech_names: dict[int, str] | None = None,
-                       settle_first: bool = False) -> dict[str, Any]:
+                       settle_first: bool = False,
+                       protected: Collection[int] = frozenset()) -> dict[str, Any]:
     """One planned, gated attack for `unit_object`.
+
+    A `protected` unit (M12: an ally lost in an earlier attempt) is left alone with no input: it
+    stays unmoved, which is the MVP Standby, and the turn counts it as skipped.
 
     With `boss_names` (or `non_boss_first`, which defaults them to `tactics.BOSS_NAMES`) the
     living foes' mech names are read once into `mech_names` (a per-trial cache) and
@@ -152,6 +156,8 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
     Never raises for game, read or input problems: an exception would make the handoff disable
     itself with the emulator on an open menu, so every failure becomes a report.
     """
+    if unit_object in protected:
+        return {"ok": False, "phase": "handover", "reason": "protected", "moved": False}
     notes: dict[str, Any] = {}
     try:
         if settle_first:

@@ -23,12 +23,20 @@ SP_OFFSET = 0x44
 LEVEL_OFFSET = 0x4E
 SPIRITS_OFFSET = 0x5C
 EFFECTS_OFFSET = 0x14
-EFFECT_BITS = {"Focus": 0x20, "Sense": 0x44}     # Sense = Flash 0x04 + Aim 0x40
+# Sense = Flash 0x04 + Aim 0x40 (24 Oct live). Alert = Flash 0x04 (25 Oct live cast: SP 19 -> 4,
+# mask 0 -> 0x04). Invincible = the 鉄 bit 4 by the effect-strip order, not observed
+# (no ally has it).
+EFFECT_BITS = {"Alert": 0x04, "Invincible": 0x10, "Focus": 0x20, "Sense": 0x44}
 SPIRIT_SLOTS = 6
 EMPTY_LEVEL = 255
 MAX_LEVEL = 99
-NAMES = {6: "Focus", 9: "Sense"}        # Setsuna's spirit screen, 23 Oct
-PREFERENCE = ("Sense", "Focus")         # user rule, 23 Oct: Sense first, then Focus
+# 6 and 9 from Setsuna's spirit screen (23 Oct); 3 and 5 from Wing Gundam Zero's pilot page (25 Oct:
+# Guard 15, Alert 10, Strike 20, Bless 45 = ids 5, 3, 7, 31). This English patch shows 鉄壁
+# as "Guard".
+NAMES = {3: "Alert", 5: "Invincible", 6: "Focus", 9: "Sense"}
+# User rule (23 Oct, extended 25 Oct): one spirit per attack, the first learned, affordable and not
+# active; Alert and Invincible serve pilots without Sense or Focus.
+PREFERENCE = ("Sense", "Focus", "Alert", "Invincible")
 # Spirit-list cursor row candidates (u8). In the five recon dumps of 23/24 Oct both equal the
 # list row while the list is open, but on a fresh launch (m11live1, 24 Oct) they did not read 0
 # on an opened list in 3 of 4 casts. Recorded as diagnostics only, never used to decide.
@@ -81,7 +89,7 @@ async def read_pilot_spirits(read: Reader, actor: int) -> dict[str, Any]:
 
 def choose_spirit(pilot: Mapping[str, Any], *,
                   active: Collection[str] = ()) -> dict[str, Any] | None:
-    """Sense if learned, affordable and not active, else Focus the same way, else None."""
+    """The first of PREFERENCE that is learned, affordable and not active, else None."""
     active = {*active, *pilot.get("active", ())}
     for name in PREFERENCE:
         for spirit in pilot["spirits"]:

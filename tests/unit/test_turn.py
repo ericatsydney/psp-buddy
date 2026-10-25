@@ -193,3 +193,10 @@ def test_a_dialogue_still_pending_keeps_the_turn_going() -> None:
               "dialogue_settled": {"settled": False, "presses": 9}}
     assert log.record(7, result) == "waiting"
     assert log.stopped is None and 7 not in log.skipped
+
+
+def test_a_protected_unit_counts_as_skipped_not_a_stop():
+    from psp_buddy.turn import TurnLog
+    log = TurnLog()
+    assert log.record(7, {'ok': False, 'phase': 'handover', 'reason': 'protected'}) == 'skipped'
+    assert log.skipped == {7: 'protected'} and log.stopped is None

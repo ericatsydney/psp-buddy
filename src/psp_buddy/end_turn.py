@@ -27,7 +27,7 @@ PHASE_PRESSES = 300            # whole enemy phase (19 Oct: 7 presses; 23 Oct: l
 SCENE_PRESSES = 60             # Circles in a row while the map state is unreadable (a scene;
                                # 23 Oct live: more than 19 dialogue lines in one event)
 PHASE_SECONDS = 900.0
-RESET_POLLS = 10               # turn T+1 seen: wait this many reads for the allies to reset
+RESET_POLLS = 20               # turn T+1 seen: reads to wait for the allies to reset
 LOSSES = ("ally_destroyed", "unit_lost")   # stops the agent may accept (user decision, 23 Oct)
 
 
@@ -113,10 +113,13 @@ def finished(start: Mapping[str, Any], state: Mapping[str, Any]) -> bool:
 
 
 def deltas(start: Mapping[str, Any], state: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Per-unit HP/EN changes since End Turn (units that appeared are listed with hp [None, hp])."""
+    """Per-unit HP/EN changes since End Turn (units that appeared are listed with hp [None, hp];
+    living units gone from the list, as destroyed units are live, with hp [hp, None] and lost)."""
     before = {u["object"]: u for u in _units(start)}
+    now = _units(state)
+    present = {u["object"] for u in now}
     changes: list[dict[str, Any]] = []
-    for u in _units(state):
+    for u in now:
         old = before.get(u["object"], {})
         entry: dict[str, Any] = {"object": u["object"], "group": u["raw_menu_group_byte"]}
         for key in ("hp", "en"):
@@ -124,6 +127,8 @@ def deltas(start: Mapping[str, Any], state: Mapping[str, Any]) -> list[dict[str,
                 entry[key] = [old.get(key), u.get(key)]
         if len(entry) > 2:
             changes.append(entry)
+    changes += [{"object": obj, "group": u["raw_menu_group_byte"], "hp": [u["hp"], None],
+                 "lost": True} for obj, u in before.items() if obj not in present and u["hp"] > 0]
     return changes
 
 
@@ -218,6 +223,30 @@ async def _read(io: ActIO, phase: Phase) -> Mapping[str, Any] | None:
     return state
 
 
+async def _new_turn(io: ActIO, phase: Phase, state: Mapping[str, Any]) -> dict[str, Any]:
+    """Turn T+1 is up: never press again; done once the allies read unmoved twice in a row."""
+    good = scenes = 0
+    for _ in range(RESET_POLLS):
+        if state is SCENE:
+            good, scenes = 0, scenes + 1
+            if scenes >= 2:
+                phase.stopped = "scene_at_new_turn"     # a turn-start event: the agent looks first
+                return phase.result("stopped")
+        else:
+            scenes = 0
+            good = good + 1 if finished(phase.start, state) else 0
+            if good >= 2:
+                phase.done = True
+                return phase.result("done")
+        await io.sleep(SETTLE_PAUSE)
+        nxt = await _read(io, phase)
+        if nxt is None:
+            return phase.result("stopped")
+        state = nxt
+    phase.stopped = "player_phase_unclear"
+    return phase.result("stopped")
+
+
 async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False) -> dict[str, Any]:
     """Circle until turn T+1 has started, a stop, or this call's cap (then "continue").
 
@@ -249,30 +278,18 @@ async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False) -> di
         if scene:
             # Decision-free dialogue: advance it with Circle, bounded (user decision, 23 Oct).
             phase.scene_run += 1
-            if phase.scene_run > SCENE_PRESSES:
+            if phase.scene_run == 1:
+                # One unreadable read may be a camera pan over the turn T+1 map: read again
+                # before any Circle.
+                await io.sleep(SETTLE_PAUSE)
+                continue
+            if phase.scene_run > SCENE_PRESSES + 1:
                 phase.stopped = "scene_too_long"
                 return phase.result("stopped")
         else:
             phase.scene_run = 0
         if not scene and turn_of(state) == phase.turn0 + 1:
-            # Turn T+1: never press again; wait for the allies to read unmoved, twice.
-            for _ in range(RESET_POLLS):
-                if state is not SCENE and finished(phase.start, state):
-                    await io.sleep(SETTLE_PAUSE)
-                    again = await _read(io, phase)
-                    if again is None:
-                        return phase.result("stopped")
-                    if again is not SCENE and finished(phase.start, again):
-                        phase.done = True
-                        return phase.result("done")
-                    state = again
-                    continue
-                await io.sleep(SETTLE_PAUSE)
-                state = await _read(io, phase)
-                if state is None:
-                    return phase.result("stopped")
-            phase.stopped = "player_phase_unclear"
-            return phase.result("stopped")
+            return await _new_turn(io, phase, state)
         if phase.presses >= PHASE_PRESSES or phase.clock() - phase.started > PHASE_SECONDS:
             phase.stopped = "phase_budget"
             return phase.result("stopped")
@@ -295,7 +312,8 @@ def report(phase: Phase) -> dict[str, Any]:
     hurt = [d["object"] for d in answer["deltas"] if d["group"] == ALLY_GROUP and "hp" in d
             and isinstance(d["hp"][0], int) and isinstance(d["hp"][1], int)
             and d["hp"][1] < d["hp"][0]]
-    destroyed = [d["object"] for d in answer["deltas"] if "hp" in d and d["hp"][1] == 0]
+    destroyed = [d["object"] for d in answer["deltas"]
+                 if d.get("lost") or ("hp" in d and d["hp"][1] == 0)]
     return {"turn": answer["turn"], "done": phase.done, "stopped": phase.stopped,
             "presses": phase.presses, "scene_presses": phase.scene_presses,
             "calls": phase.calls, "damaged_allies": hurt,

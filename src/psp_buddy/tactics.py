@@ -95,7 +95,7 @@ def _rule_and_pick(options: Sequence[dict[str, Any]], target: Mapping[str, Any],
     return "median", ranked[(len(ranked) - 1) // 2]
 
 
-def _name_key(name: str) -> str:
+def name_key(name: str) -> str:
     return "".join(ch for ch in name.casefold() if ch.isalnum())
 
 
@@ -108,10 +108,10 @@ def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, st
             and type(u.get("max_hp")) is int]
     if not foes:
         return frozenset()
-    wanted = {_name_key(n) for n in names}
+    wanted = {name_key(n) for n in names}
     middle = median(u["max_hp"] for u in foes)
     return frozenset(u["object"] for u in foes
-                     if _name_key(mech_names.get(u["object"], "")) in wanted - {""}
+                     if name_key(mech_names.get(u["object"], "")) in wanted - {""}
                      or (factor and u["max_hp"] >= factor * middle))
 
 

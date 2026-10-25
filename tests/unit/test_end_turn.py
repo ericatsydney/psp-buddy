@@ -25,18 +25,23 @@ class EnemyPhaseSim:
     def __init__(self, screens=3, **flags):
         self.units = [unit(1, 5, 5, ready=True), unit(2, 6, 5), unit(3, 9, 9, FOE, ready=False)]
         self.turn, self.cursor, self.screen = 7, [5, 5], 'map'
+        self.player_turn = 7                         # M13: the turn the player (agent) is in
         self.screens, self.flags, self.log = screens, flags, []
         self.reads = 0
+
+    async def read_weapons(self, obj):              # M13: turn_next reads foe mech names
+        return {'object': obj, 'mech_name': '', 'weapons': []}
 
     async def press(self, button, frames=2):
         self.log.append(button)
         step = {'up': (0, -1), 'down': (0, 1), 'left': (-1, 0), 'right': (1, 0)}.get(button)
         if step:                                     # the helper's own cursor walk
-            assert self.screen == 'map' and self.turn == 7, 'direction pressed off the map'
+            assert self.screen == 'map' and self.turn == self.player_turn, (
+                'direction pressed off the map')
             self.cursor = [self.cursor[0] + step[0], self.cursor[1] + step[1]]
             return
         assert button in ('circle', 'cross'), button
-        if self.screen == 'map' and button == 'circle' and self.turn > 7:
+        if self.screen == 'map' and button == 'circle' and self.turn > self.player_turn:
             raise AssertionError('Circle pressed on the new player phase map')
         if self.screen == 'map' and button == 'circle':
             occupied = any((u['tile_x'], u['tile_y']) == tuple(self.cursor) for u in self.units)
@@ -80,9 +85,16 @@ class EnemyPhaseSim:
         if self.screen == 'enemy' and self.screens in self.flags.get('scene_at', ()):
             # Story scene (23 Oct live: "OZ Soldier" dialogue): the map state is not readable.
             raise ActIOError('battle state not readable now: cursor tile outside the map')
+        if self.turn > self.player_turn:
+            self.new_reads = getattr(self, 'new_reads', 0) + 1
+            if self.flags.get('pan_reads', 0) >= self.new_reads:
+                # The camera pans to the new phase: the cursor reads outside the map briefly.
+                raise ActIOError('battle state not readable now: cursor tile outside the map')
+            if self.flags.get('turn_start_scene') and self.new_reads >= 2:
+                raise ActIOError('battle state not readable now: cursor tile outside the map')
         if getattr(self, 'pending_reset', 0) > 0:
             self.pending_reset -= 1
-        elif self.turn > 7 and not self.flags.get('no_reset'):
+        elif self.turn > self.player_turn and not self.flags.get('no_reset'):
             for u in self.units:
                 if u['raw_menu_group_byte'] == ALLY:
                     u['counted_as_unmoved'] = True
@@ -328,3 +340,38 @@ def test_a_scene_without_any_loss_is_still_advanced():
     sim = EnemyPhaseSim(screens=5, scene_at=(3, 2))
     phase = ended(sim)
     assert run(end_turn.advance(sim, phase, accept_losses=True))['phase'] == 'done'
+
+
+# ---- review fixes (25 Oct) ------------------------------------------------------------------
+
+def test_deltas_list_a_unit_gone_from_the_list_as_lost():
+    # 23 Oct live: destroyed units vanish from the unit list instead of reading HP 0.
+    start = state([unit(1, 5, 5), unit(3, 9, 9, FOE, hp=8000), unit(4, 1, 1, FOE, hp=0)])
+    now = state([unit(1, 5, 5)])
+    assert end_turn.deltas(start, now) == [
+        {'object': 3, 'group': FOE, 'hp': [8000, None], 'lost': True}]
+
+
+def test_units_gone_from_the_list_are_reported_destroyed():
+    sim = EnemyPhaseSim(screens=3, lose_ally=True)
+    phase = ended(sim)
+    assert run(end_turn.advance(sim, phase))['reason'] == 'unit_lost'
+    report = end_turn.report(phase)
+    assert report['destroyed'] == [2]
+    assert {'object': 2, 'group': ALLY, 'hp': [5000, None], 'lost': True} in report['deltas']
+
+
+def test_one_unreadable_read_on_the_new_turn_map_is_not_pressed():
+    # A single unreadable read may be a camera pan over the turn T+1 map, not a dialogue.
+    sim = EnemyPhaseSim(screens=2, pan_reads=1)
+    phase = ended(sim)
+    result = run(end_turn.advance(sim, phase))       # the sim raises if Circle hits turn 8
+    assert result['phase'] == 'done' and result['presses'] == 2
+
+
+def test_a_scene_at_the_start_of_the_new_turn_stops_for_the_agent():
+    sim = EnemyPhaseSim(screens=2, turn_start_scene=True)
+    phase = ended(sim)
+    result = run(end_turn.advance(sim, phase))       # never Circled: turn 8 is up
+    assert result['phase'] == 'stopped' and result['reason'] == 'scene_at_new_turn'
+    assert result['presses'] == 2

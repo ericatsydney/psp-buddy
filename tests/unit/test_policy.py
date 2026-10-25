@@ -23,6 +23,7 @@ def test_empty_uses_explicit_defaults():
     ('use medium strength weapons otherwise', 'heal_below_percent', 70),
     ('target non-bosses before bosses', 'non_boss_first', True),
     ('use sense then focus before attacking', 'spirit_before_attack', True),
+    ('use spirits before attacking', 'spirit_before_attack', True),
 ])
 def test_supported_clauses(clause, field, value):
     assert getattr(parse_policy(clause), field) == value

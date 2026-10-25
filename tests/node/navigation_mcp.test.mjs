@@ -18,7 +18,9 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  await client.callTool({name:'ppsspp_press_button',arguments:cast});
  await client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'spirit_confirm',button:'circle',purpose:'confirm_spirit',highlighted_entry:'Yes'}});
  for (const changed of [{spirit_name:undefined},{spirit_name:''},{purpose:'confirm_spirit',context:'spirit_confirm',highlighted_entry:'No'}]) await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:JSON.parse(JSON.stringify({...cast,...changed}))}));
- calls.splice(1,4);
+ await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'info',button:'circle',purpose:'info_page'}}));
+ await client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'info',button:'right',purpose:'info_page'}});
+ calls.splice(1,5);
  await client.callTool({name:'ppsspp_read_state',arguments:{sequence:3}});assert.equal(calls.length,2);
  for (const bad of [{},{sequence:0},{sequence:1,screen_file:'x.png'},{sequence:'1'}]) await assert.rejects(client.callTool({name:'ppsspp_read_state',arguments:bad}));
  await client.callTool({name:'ppsspp_read_weapons',arguments:{sequence:4,object:149303288}});assert.equal(calls.length,3);assert.equal(calls[2][0],'weapons');
@@ -43,6 +45,7 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  for (const bad of [{unit_object:5},{unit_object:'1'},{move_to:[1]},{move_to:[1,'2']},{attack:{weapon:'x'}},{attack:{weapon:'x',target_object:1,extra:1}},{attack:{weapon:'',target_object:149303912}},{commit:'yes'},{phase:'other'},{context:'info'},{button:'circle'}]) await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{...act,...bad}}));
  await assert.rejects(client.callTool({name:'ppsspp_act',arguments:{sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288}}));
  await client.callTool({name:'ppsspp_turn_next',arguments:{sequence:1}});assert.equal(calls.at(-1)[0],'turn_next');
+ const turnNext=(await client.listTools()).tools.find(t=>t.name==='ppsspp_turn_next');assert.match(turnNext.description,/handover/);assert.match(turnNext.description,/no further input/);
  for (const bad of [{},{sequence:0},{sequence:1,extra:1},{sequence:'1'}]) await assert.rejects(client.callTool({name:'ppsspp_turn_next',arguments:bad}));
  const et={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',phase:'open'};
  await client.callTool({name:'ppsspp_end_turn',arguments:et});assert.equal(calls.at(-1)[0],'end_turn');
@@ -55,6 +58,7 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  await client.callTool({name:'ppsspp_plan_act',arguments:pa});assert.equal(calls.at(-1)[0],'plan_act');
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,min_hit:40}});
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,boss_names:['Mercurius','Vayeate']}});
- for (const bad of [{unit_object:5},{policy:5},{policy:'x'.repeat(401)},{bosses:[1]},{bosses:'x'},{context:'attack_forecast'},{move_to:[1,2]},{commit:true},{min_hit:0},{min_hit:101},{min_hit:'5'},{boss_names:'Mercurius'},{boss_names:['']},{boss_names:['x'.repeat(33)]}]) await assert.rejects(client.callTool({name:'ppsspp_plan_act',arguments:{...pa,...bad}}));
+ await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,protected:[149303600]}});
+ for (const bad of [{unit_object:5},{policy:5},{policy:'x'.repeat(401)},{bosses:[1]},{bosses:'x'},{context:'attack_forecast'},{move_to:[1,2]},{commit:true},{min_hit:0},{min_hit:101},{min_hit:'5'},{boss_names:'Mercurius'},{boss_names:['']},{boss_names:['x'.repeat(33)]},{protected:[1]},{protected:'x'}]) await assert.rejects(client.callTool({name:'ppsspp_plan_act',arguments:{...pa,...bad}}));
  } finally {await client.close();await server.close();}
 });

@@ -283,3 +283,18 @@ def test_a_settle_that_progresses_but_does_not_finish_waits_for_the_next_call():
     result = run(plan_act.plan_and_act(sim, POLICY, 1000, settle_first=True))
     assert result['phase'] == 'dialogue_pending' and result['dialogue_settled']['presses'] > 0
     assert 'start' not in sim.log
+
+
+# ---- M12 protected units (user, 25 Oct: a lost ally only Standbys on the retry) --------------
+
+def test_a_protected_unit_is_left_alone_with_no_input():
+    sim = Game()
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, protected={1000}))
+    assert result == {'ok': False, 'phase': 'handover', 'reason': 'protected', 'moved': False}
+    assert sim.log == []
+
+
+def test_an_unprotected_unit_still_fires():
+    sim = Game()
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, protected={1001}, hits={2000: 42}))
+    assert result['phase'] == 'fired'

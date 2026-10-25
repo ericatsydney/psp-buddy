@@ -164,3 +164,43 @@ python -u local/m9-tools/turn_loop.py 40 2
 python -u local/m10-tools/end_turn_steps.py open <next_seq>      # check the MENU_SHOT screenshot
 python -u local/m10-tools/end_turn_steps.py confirm <seq> <file> <sha256>
 ```
+
+## M12 Task 1 — Alert and Invincible ids, offline (25 Oct)
+
+- PPSSPP 1.20.4 debugger WebSocket: the subscribers are Breakpoint, CPUCore, ClientConfig, Disasm, GPUBuffer,
+  GPURecord, GPUStats, Game (`game.reset`, `game.status`, `version`), HLE, Input, Memory, MemoryInfo, Replay
+  (input replay only), Stepping. **No save/load-state event**, so M12 saves through the window menu.
+- All 26 pilots decoded from `m9livesp1-run-20261023T124311Z/ram-02.bin` (actor bindings from capture-001-1.json).
+  Seen ids: 1-7, 9-16, 18-28, 30-32, 34, 35.
+- Hypothesis (not screen-proven): spirit ids follow the effect strip 熱魂閃不鉄集必: 1 Valor (熱血; learned late,
+  cost 30-40), 2 Soul (魂; late, 50-55), **3 Alert (閃き; cost 10-15, early)**, 4 Persist (不屈; 10-15),
+  **5 Invincible (鉄壁; 15-25)**, 6 Focus (proven), 7 Strike (必中; 15-25, often level 1). 9 Sense is proven and
+  breaks the strip order (Sense has no strip effect of its own). Expected mask bits: Alert 0x04 (閃, the Flash bit
+  Sense also sets), Invincible 0x10 (鉄).
+- Allies with id 3 learned: 149303184 (mech 231, HP 11000, (18,16), SP 19, Alert 15; id 5 at level 28, it is 19)
+  and 149304848 (mech 140, (18,7), Alert 10, also Focus). **No ally has id 5 learned on this map**; only Wing Gundam
+  Zero (149299544, third force) does: (5,1,15) (3,14,10) (7,27,20) (31,29,45).
+- Live proof needed (Task 2): Wing Gundam Zero's pilot status screen should list ids 5, 3, 7 by name, proving both
+  names in one view-only visit; one Alert cast on 149303184 (SP 19 -> 4, mask +0x04 expected). The Invincible bit
+  cannot be cast-checked here; its cast check falls back to the SP drop (it cannot trigger for allies on this map).
+
+## M12 Task 2 — live proof of the ids (25 Oct)
+
+Every run: backup `backups/<run>-original-*` 54/54 SHA-256 verified, PPSSPP closed gracefully, originals 0/54
+changed. Screens in `local/m12-shots/steps/`.
+- Note on the start state: trials seed from the portable memstick (`local/runtime/.../memstick`, `_1.ppst` of
+  8 Oct = stage 21, turn 7), not from the originals. The user played on 24 Oct evening (new S006, originals'
+  `_1.ppst`/`_2.ppst`); that only changes the backup reference. A first checkpoint copied from the originals'
+  `_1.ppst` loaded the user's city stage (kept as `local/checkpoints/WRONG-city-stage-not-turn7`, unused).
+- **Run m12info4 (declaration `info_recon`, new view-only bridge step `info_page`)**: on a third-force unit the
+  first Circle shows its move range (red), the second opens the status screen; Right pages Unit -> Pilot.
+  Wing Gundam Zero (Quatre, LV36, SP 90) lists **Guard 15, Alert 10, Strike 20, Bless 45** = decoded
+  (5,1,15) (3,14,10) (7,27,20) (31,29,45). So **id 3 = Alert, id 5 = Guard** (鉄壁; the code keeps the name
+  `Invincible`), 7 = Strike, 31 = Bless. Cross returns to the map.
+- **Run m12alert1 (`spirit_cast_recon` Alert on 149303184 = Ptolemaios, from `local/checkpoints/turn7-start`)**:
+  Command menu has **5 entries: Move / Attack / Spirit / Retrieve / Info** (Spirit row 2). Spirit opens a
+  **pilot screen** (Sumeragi 19, Lasse 33, Feldt 32, Mileina 29); Circle on Sumeragi -> list Alert 15 (row 0,
+  "100% Eva., Self · 1 Battle"), Trust 25 (id 15 = Trust). One Circle cast: back on the map (a yellow area
+  around the ship), **SP 19 -> 4, mask +0x14 0 -> 0x04 (`Alert` active)** (ram-01/ram-02 decoded with
+  `local/m12-tools/decode_pilot_dump.py`). The production cast step skips this ship safely (5 entries, mech not
+  in `SPIRIT_ROW_BY_MECH` -> `menu_layout_unknown`); supporting it needs the pilot-screen Circle (later).

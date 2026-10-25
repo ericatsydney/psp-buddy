@@ -15,7 +15,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from . import act as act_macro
-from . import battle_state, end_turn, plan_act, turn
+from . import battle_state, clear, end_turn, plan_act, targets, turn
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
@@ -28,12 +28,20 @@ MAX_ACTION_TAPS = 40
 MAX_DUMPS = 24
 MAX_STATE_READS = 600              # memory-only; M11 cursor and dialogue checks (m11live17)
 MAX_WEAPON_READS = 200
+MAX_PROTECTED = 26                 # M12 retries: allies lost in earlier attempts
 MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
 MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
 MAX_PROBES = 60
 MAX_ACTS = 40
 MAX_ACT_PRESSES = 1000              # presses sent by `act` per trial (taps and cursor walks)
+# M13: after a handover none of these is accepted (memory reads and screenshots still are).
+INPUT_OPERATIONS = ("press", "goto", "act", "plan_act", "probe_move", "end_turn", "enemy_phase")
+# M13: these budgets count per player turn (the counters themselves keep running: readers number
+# their reads with them); taps, dumps and the turn count stay per trial.
+PER_TURN = ("_state_reads", "_weapon_reads", "_hit_reads", "_target_reads", "_probes", "_acts",
+            "_act_presses", "_goto_presses")
+MAX_PLAYER_TURNS = 6                # M13 turn budget 5, plus one (defence in depth)
 ACT_PRESS_RESERVE = 60              # a run starts only with at least this many presses left
 ACT_SECONDS = 105                   # cooperative budget; the helper cancels hard at 120 s, which
                                     # would leave the emulator paused, so the macro never gets there
@@ -79,12 +87,14 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     # Cast recon only: one Circle on the declared spirit, then Yes if the game asks.
     "cast_spirit": (("circle",), ("spirit_list",), "spirit_name"),
     "confirm_spirit": (("circle",), ("spirit_confirm",), "highlighted_entry"),
+    # View-only status pages of a declared unit (M12: a third-force pilot's spirit names).
+    "info_page": (DIRECTIONS, ("info",), None),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
                    "select_target", "choose_target", "confirm_attack", "standby_after_move",
                   "dismiss_result", "open_system_menu", "system_menu_move", "end_turn",
                   "advance_dialog", "open_spirit", "spirit_pilot", "spirit_menu_move",
-                  "cast_spirit", "confirm_spirit")
+                  "cast_spirit", "confirm_spirit", "info_page")
 SPIRIT_PURPOSES = ("open_spirit", "spirit_pilot", "spirit_menu_move", "cast_spirit",
                    "confirm_spirit")
 CAST_PURPOSES = ("cast_spirit", "confirm_spirit")
@@ -176,6 +186,12 @@ class InfoNavigation:
             (int(x), int(y)) for x, y in occupied_tiles}
         self._menu_open = False
         self._mech_names: dict[int, str] = {}     # foe mech names: static within a battle
+        self._name_failed: set[int] = set()       # foes whose name read failed (not retried)
+        self._clear: clear.ClearRun | None = None  # M13: fixed at the first turn_next
+        self._handover: str | None = None         # M13: the handover reason; input is over
+        self._pending: str | None = None          # M13: handover for the next turn_next
+        self._player_turns = 1
+        self._turn_base: dict[str, int] = {}      # PER_TURN counters at this turn's start
         self._bonus_unit: int | None = None       # the last plan_act ended on a bonus action
         self._dialogue_pending = False            # the last act left a story dialogue up
         self._advances = 0
@@ -204,7 +220,7 @@ class InfoNavigation:
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
                            ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"],
-                           ["act"], ["spirit_recon"], ["spirit_cast_recon"])
+                           ["act"], ["spirit_recon"], ["spirit_cast_recon"], ["info_recon"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -281,6 +297,10 @@ class InfoNavigation:
                                                 or "spirit_confirm" in self._done):
                 raise ValueError("Yes is permitted once, right after the declared cast")
         if purpose in SPIRIT_PURPOSES:
+            return
+        if ("info_recon" in actions) != (purpose == "info_page"):
+            raise ValueError("an Info recon trial permits only paging the status screen")
+        if purpose == "info_page":
             return
         if "act" in actions and self._bonus_unit is not None and purpose in BONUS_PURPOSES:
             # A Continue Attack kill left the game on its result screens (24 Oct live): the agent
@@ -364,10 +384,13 @@ class InfoNavigation:
         keys = set(arguments)
         if arguments.get("sequence") != self._next or type(arguments.get("sequence")) is not int:
             raise ValueError("out-of-order navigation sequence")
+        over = self._handover or (self._pending if self._pending == "player_turn_limit" else None)
+        if over is not None and operation in INPUT_OPERATIONS:
+            raise ValueError(f"handed over ({over}): no further input is accepted")
         if operation == "state":
             # Pure memory read: no screenshot reference, no input.
             if keys != {"sequence"} or self._read_state is None or (
-                    self._state_reads >= MAX_STATE_READS):
+                    self._used("_state_reads") >= MAX_STATE_READS):
                 raise ValueError("state read needs only a sequence, a reader and budget")
             return "", None
         if operation == "weapons":
@@ -375,13 +398,13 @@ class InfoNavigation:
             unit_object = arguments.get("object")
             if (keys != {"sequence", "object"} or type(unit_object) is not int
                     or not RAM_START <= unit_object < RAM_END or self._read_weapons is None
-                    or self._weapon_reads >= MAX_WEAPON_READS):
+                    or self._used("_weapon_reads") >= MAX_WEAPON_READS):
                 raise ValueError("weapon read needs a sequence, a unit object, a reader and budget")
             return "", None
         if operation == "turn_next":
             # Pure memory read: next ready ally of this turn (bookkeeping in memory only).
             if keys != {"sequence"} or self._read_state is None or (
-                    self._state_reads >= MAX_STATE_READS):
+                    self._used("_state_reads") >= MAX_STATE_READS):
                 raise ValueError("turn_next needs only a sequence, a reader and budget")
             return "", None
         if operation == "end_turn":
@@ -396,7 +419,8 @@ class InfoNavigation:
             return "", None
         if operation == "hit":
             # Pure memory read of the hover hit chance (valid only in target select).
-            if keys != {"sequence"} or self._read_hit is None or self._hit_reads >= MAX_HIT_READS:
+            if (keys != {"sequence"} or self._read_hit is None
+                    or self._used("_hit_reads") >= MAX_HIT_READS):
                 raise ValueError("hit read needs only a sequence, a reader and budget")
             return "", None
         if operation == "targets":
@@ -405,7 +429,8 @@ class InfoNavigation:
             if (not keys <= {"sequence", "object", "moved"} or not {"sequence", "object"} <= keys
                     or type(unit_object) is not int or not RAM_START <= unit_object < RAM_END
                     or type(arguments.get("moved", False)) is not bool
-                    or self._read_targets is None or self._target_reads >= MAX_TARGET_READS):
+                    or self._read_targets is None
+                    or self._used("_target_reads") >= MAX_TARGET_READS):
                 raise ValueError("target read needs a sequence, a unit object, a reader and budget")
             return "", None
         if arguments.get("context") not in CONTEXTS:
@@ -414,6 +439,14 @@ class InfoNavigation:
             if keys != BASE_KEYS or self._observe_stage is None or self._stages >= 40:
                 raise ValueError("observe requires a screenshot reference and a stage observer")
             return self._frame(arguments), None
+        backing_out = (operation == "press" and self._end_phase is None
+                       and arguments.get("purpose") == "cancel"
+                       and arguments.get("context") == "system_menu")
+        if operation in ("press", "goto", "act", "plan_act", "probe_move") and not backing_out and (
+                self._end_menu_open or self._end_phase is not None):
+            # Spec M10: once End Turn has started only end_turn confirm and enemy_phase send input.
+            raise ValueError("End Turn has started: only end_turn confirm and enemy_phase may "
+                             "send input")
         if operation == "goto":
             return self._check_goto(arguments, keys), None
         if operation == "act":
@@ -466,7 +499,7 @@ class InfoNavigation:
         if (decl is None or decl["actions"] != ["probe"] or keys != BASE_KEYS | {"tile"}
                 or self._read_cursor is None or self._read_state is None
                 or self._map_size is None or self._ally_tiles is None
-                or arguments["context"] != "map" or self._probes >= MAX_PROBES):
+                or arguments["context"] != "map" or self._used("_probes") >= MAX_PROBES):
             raise ValueError("probe_move needs the probe declaration, readers and a map screenshot")
         tile = arguments["tile"]
         if not (self._tile(tile) and isinstance(tile, list)
@@ -549,7 +582,8 @@ class InfoNavigation:
                 raise ValueError("no matching forecast is waiting to be fired")
         elif self._act_pending is not None:
             raise ValueError("a forecast is waiting: fire it or cancel it first")
-        if self._acts >= MAX_ACTS or self._act_presses + ACT_PRESS_RESERVE > MAX_ACT_PRESSES:
+        if (self._used("_acts") >= MAX_ACTS
+                or self._used("_act_presses") + ACT_PRESS_RESERVE > MAX_ACT_PRESSES):
             raise ValueError("act budget for this trial is exhausted")
         name = self._frame(arguments)
         if name in self._stale or self._uses.get(name, 0) >= 1:
@@ -560,7 +594,7 @@ class InfoNavigation:
         decl = self._declaration
         required = BASE_KEYS | {"unit_object", "policy"}
         if (decl is None or decl["actions"] != ["act"] or not required <= keys
-                or not keys <= required | {"bosses", "min_hit", "boss_names"}
+                or not keys <= required | {"bosses", "min_hit", "boss_names", "protected"}
                 or self._read_state is None or self._read_weapons is None
                 or self._read_hit is None or self._read_cursor is None
                 or self._read_menu_row is None or self._map_size is None):
@@ -574,6 +608,10 @@ class InfoNavigation:
                 or not isinstance(bosses, list) or len(bosses) > 8
                 or not all(type(b) is int and RAM_START <= b < RAM_END for b in bosses)):
             raise ValueError("plan_act needs a unit, a policy text and optional bosses")
+        guarded = arguments.get("protected", [])
+        if (not isinstance(guarded, list) or len(guarded) > MAX_PROTECTED
+                or not all(type(g) is int and RAM_START <= g < RAM_END for g in guarded)):
+            raise ValueError(f"protected must be up to {MAX_PROTECTED} unit objects")
         names = arguments.get("boss_names", [])
         if (not isinstance(names, list) or len(names) > 8
                 or not all(isinstance(n, str) and 1 <= len(n) <= 32 for n in names)):
@@ -584,7 +622,8 @@ class InfoNavigation:
         parse_policy(text)          # an unsupported clause is refused before any input
         if self._act_pending is not None:
             raise ValueError("a forecast is waiting: fire it or cancel it first")
-        if self._acts >= MAX_ACTS or self._act_presses + ACT_PRESS_RESERVE > MAX_ACT_PRESSES:
+        if (self._used("_acts") >= MAX_ACTS
+                or self._used("_act_presses") + ACT_PRESS_RESERVE > MAX_ACT_PRESSES):
             raise ValueError("act budget for this trial is exhausted")
         name = self._frame(arguments)
         if name in self._stale or self._uses.get(name, 0) >= 1:
@@ -600,11 +639,14 @@ class InfoNavigation:
         assert isinstance(bosses, list)
         names = arguments.get("boss_names")
         assert names is None or isinstance(names, list)
+        guarded = arguments.get("protected", [])
+        assert isinstance(guarded, list)
         outcome: dict[str, object] = await plan_act.plan_and_act(
             self._act_io(), parse_policy(text), unit_object, bosses=frozenset(bosses),
             min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
             damage_log=self._evidence / "damage-log.jsonl", boss_names=names,
-            mech_names=self._mech_names, settle_first=self._dialogue_pending)
+            mech_names=self._mech_names, settle_first=self._dialogue_pending,
+            protected=frozenset(guarded))
         self._act_pending = None
         done = outcome.get("outcome")
         self._bonus_unit = (unit_object if isinstance(done, Mapping) and done.get("bonus_action")
@@ -680,7 +722,44 @@ class InfoNavigation:
         outcome = await end_turn.advance(self._act_io(), self._end_phase,
                                          accept_losses=accept_losses)
         error = self._write_enemy_report()
+        if outcome.get("phase") != "stopped":
+            self._pending = None          # an accepted-loss resume clears an earlier stop
+        if outcome.get("phase") == "done":
+            error = "; ".join(e for e in (error, self._new_player_turn()) if e) or None
+        elif outcome.get("phase") == "stopped" and self._pending is None:
+            self._pending = str(outcome.get("reason") or "enemy_phase_stopped")
         return {**outcome, "report_error": error} if error else outcome
+
+    def _used(self, counter: str) -> int:
+        """A PER_TURN counter's use in this player turn."""
+        used: int = getattr(self, counter) - self._turn_base.get(counter, 0)
+        return used
+
+    def _new_player_turn(self) -> str | None:
+        """M13: turn T+1 has started (allies reset): keep turn T's reports, then reset the turn
+        bookkeeping and the per-turn budgets. Returns a report-copy error, never raises."""
+        assert self._end_phase is not None
+        ended = self._end_phase.turn0
+        error = None
+        try:
+            for name in ("turn-report", "enemy-phase-report"):
+                source = self._evidence / f"{name}.json"
+                if source.is_file():
+                    (self._evidence / f"{name}-{ended}.json").write_bytes(source.read_bytes())
+        except OSError as exc:
+            error = repr(exc)
+        self._end_phase = None
+        self._end_menu_open = False
+        self._turn = turn.TurnLog()
+        self._turn_state = {}
+        self._turn_done = False
+        self._act_pending = None
+        self._bonus_unit = None
+        self._turn_base = {counter: getattr(self, counter) for counter in PER_TURN}
+        self._player_turns += 1
+        if self._player_turns > MAX_PLAYER_TURNS:
+            self._pending = "player_turn_limit"
+        return error
 
     def _write_enemy_report(self) -> str | None:
         """Rewrite enemy-phase-report.json; errors are returned, never raised."""
@@ -690,6 +769,69 @@ class InfoNavigation:
             (self._evidence / "enemy-phase-report.json").write_text(
                 json.dumps(end_turn.report(self._end_phase), allow_nan=False, indent=1),
                 encoding="utf-8")
+        except (OSError, TypeError, ValueError) as exc:
+            return repr(exc)
+        return None
+
+    async def _read_foe_names(self, state: Mapping[str, object]) -> None:
+        """Foe mech names into the shared cache (memory-only weapon reads, once per foe); a
+        failed read leaves the foe a boss by max HP only, as in `plan_act`."""
+        units = state.get("units")
+        if self._read_weapons is None or not isinstance(units, list):
+            return
+        for unit in units:
+            obj = unit.get("object") if isinstance(unit, Mapping) else None
+            if (type(obj) is not int or obj in self._mech_names or obj in self._name_failed
+                    or unit.get("raw_menu_group_byte") != targets.ENEMY_GROUP
+                    or self._used("_weapon_reads") >= MAX_WEAPON_READS):
+                continue
+            self._weapon_reads += 1
+            try:
+                read = await self._read_weapons(self._weapon_reads, obj)
+                self._mech_names[obj] = str(read.get("mech_name", ""))
+            except (act_macro.ActIOError, OSError, ValueError, TypeError, KeyError):
+                self._name_failed.add(obj)
+
+    async def _clear_check(self, state: Mapping[str, object], stopped: object
+                           ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        """M13: the clear status, the handover reason (None = keep playing) and a report error.
+        A new handover writes handover.json once; afterwards the same reason is returned."""
+        if self._handover is None:
+            await self._read_foe_names(state)
+        try:
+            if self._clear is None:
+                self._clear = clear.begin(state, self._mech_names)
+            status: dict[str, Any] | None = clear.status(self._clear, state, self._mech_names)
+            reason = (self._handover or self._pending
+                      or clear.decide(self._clear, state, mech_names=self._mech_names))
+        except ValueError:
+            # Without a readable state the stop rule cannot be applied: never play on blind.
+            status, reason = None, self._handover or self._pending or "state_unreadable"
+        if reason is None and stopped is not None:
+            reason = f"stopped:{stopped}"
+        if reason is None or self._handover is not None:
+            return status, reason, None
+        self._handover = reason
+        return status, reason, self._write_handover(state, reason)
+
+    def _write_handover(self, state: Mapping[str, object], reason: str) -> str | None:
+        """handover.json (spec M13); errors are returned, never raised (the lock holds anyway)."""
+        try:
+            # A stop (enemy phase or turn) may leave a scene or menu up; the others are on the map.
+            stop = reason.startswith("stopped:") or (
+                reason == self._pending and reason != "player_turn_limit")
+            extra: dict[str, Any] = {"screen_state": "after_stop" if stop else "map"}
+            for name in ("turn-report", "enemy-phase-report"):
+                key = name.replace("-", "_") + "s"
+                extra[key] = sorted((p.name for p in self._evidence.glob(f"{name}-*.json")),
+                                    key=lambda n: int(n.rsplit("-", 1)[1].split(".")[0]))
+            data: dict[str, Any] = {"reason": reason, **extra}
+            if self._clear is not None:
+                data = clear.handover_report(self._clear, state, reason,
+                                             mech_names=self._mech_names, extra=extra)
+            self._evidence.mkdir(parents=True, exist_ok=True)
+            (self._evidence / "handover.json").write_text(
+                json.dumps(data, allow_nan=False, indent=1), encoding="utf-8")
         except (OSError, TypeError, ValueError) as exc:
             return repr(exc)
         return None
@@ -717,7 +859,9 @@ class InfoNavigation:
 
         class Io:
             async def press(self, button: str, frames: int = 2) -> None:
-                if nav._act_presses >= MAX_ACT_PRESSES:
+                # The enemy phase has its own cap (end_turn.PHASE_PRESSES); the player turn's
+                # budget must not cut it short with the game on an enemy forecast.
+                if nav._end_phase is None and nav._used("_act_presses") >= MAX_ACT_PRESSES:
                     raise act_macro.ActIOError("act press budget exhausted")
                 nav._act_presses += 1
                 nav._log({"operation": "act_press", "button": button,
@@ -828,7 +972,7 @@ class InfoNavigation:
         assert self._read_cursor is not None
         x, y = await self._read_cursor()
         needed = abs(target[0] - x) + abs(target[1] - y)
-        if self._goto_presses + needed > MAX_GOTO_PRESSES:
+        if self._used("_goto_presses") + needed > MAX_GOTO_PRESSES:
             raise NavigationRefused("cursor press budget for this trial is exhausted")
         presses, stalls, unexpected = 0, 0, False
         while (x, y) != (target[0], target[1]) and presses < MAX_GOTO_STEPS:
@@ -1025,15 +1169,19 @@ class InfoNavigation:
                     raise
                 self._turn_state = state
                 chosen = turn.next_unit(state, self._turn)
+                status, reason, handover_error = await self._clear_check(state, chosen["stopped"])
+                if reason is not None:
+                    chosen = {**chosen, "unit_object": None, "done": False}
                 self._turn_done = bool(chosen["done"]) and chosen["stopped"] is None
                 answer = {**chosen, "skipped": {str(k): v for k, v in chosen["skipped"].items()},
-                          "sequence": sequence}
+                          "sequence": sequence, "clear": status,
+                          "handover": None if reason is None else {"reason": reason}}
                 error = self._write_turn_report()
-                if error:
-                    answer["report_error"] = error
+                if error or handover_error:
+                    answer["report_error"] = "; ".join(e for e in (error, handover_error) if e)
                 self._log({"sequence": sequence, "operation": "turn_next",
                            "unit_object": answer["unit_object"], "done": answer["done"],
-                           "stopped": answer["stopped"]})
+                           "stopped": answer["stopped"], "handover": reason})
                 return answer
             if operation == "observe":
                 assert self._observe_stage is not None
@@ -1077,6 +1225,7 @@ class InfoNavigation:
                 self._act_pending = None
             elif purpose == "cancel" and arguments["context"] == "system_menu":
                 self._menu_open = False
+                self._end_menu_open = False      # backed out before confirm (review 25 Oct)
             elif purpose == "choose_target":
                 self._chosen = True
             elif purpose == "confirm_attack":

@@ -16,7 +16,8 @@ CLAUSES = (
 )
 FLAG_CLAUSES = {
     "target non-bosses before bosses": "non_boss_first",
-    "use sense then focus before attacking": "spirit_before_attack",
+    "use sense then focus before attacking": "spirit_before_attack",     # M11 wording
+    "use spirits before attacking": "spirit_before_attack",
 }
 FIXED_CLAUSES = (
     "stop on map clear", "prefer repair then trust then retreat",

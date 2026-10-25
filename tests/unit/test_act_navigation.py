@@ -298,7 +298,18 @@ def test_plan_act_accepts_boss_names_and_keeps_foe_names_for_the_trial(owned, tm
                                         if u['raw_menu_group_byte'] == 12}
 
 
+def test_plan_act_leaves_a_protected_unit_alone(owned, tmp_path):
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    answer = asyncio.run(service.execute('plan_act', frame(
+        sequence=1, policy='', protected=[BASE + 1000], **request())))
+    assert answer['phase'] == 'handover' and answer['reason'] == 'protected'
+    assert adapter.sent == []
+
+
 @pytest.mark.parametrize('extra', [{'policy': 'win the battle'}, {'policy': 5}, {'bosses': [1]},
+                                   {'protected': [1]}, {'protected': 'x'},
+                                   {'protected': [BASE] * 27},
                                    {'unit_object': 5}, {'move_to': [1, 2]},
                                    {'boss_names': 'Mercurius'}, {'boss_names': ['']},
                                    {'boss_names': ['x' * 33]}, {'boss_names': ['a'] * 9}])
@@ -420,6 +431,121 @@ def test_an_unwritable_turn_report_does_not_lose_the_plan_act_result(owned, tmp_
     asyncio.run(scenario())
 
 
+# ---- M13: clear the non-boss foes, then hand over -------------------------------------------
+
+def named_sim(names):
+    """plan_sim whose weapon reads carry foe mech names; counts the reads."""
+    sim = plan_sim()
+    real, reads = sim.read_weapons, []
+
+    async def read_weapons(obj):
+        reads.append(obj)
+        answer = await real(obj)
+        return {**answer, 'mech_name': names.get(obj, 'Taurus')}
+    sim.read_weapons = read_weapons
+    return sim, reads
+
+
+def drop(sim, obj):
+    sim.units = [u for u in sim.units if u['object'] != obj]
+
+
+INPUTS = ('press', 'goto', 'act', 'plan_act', 'probe_move', 'end_turn', 'enemy_phase')
+
+
+def test_turn_next_reports_the_clear_status_and_reads_each_foe_name_once(owned, tmp_path):
+    sim, reads = named_sim({BASE + 2000: 'Mercurius'})
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        first = await service.execute('turn_next', {'sequence': 1})
+        assert first['clear'] == {'nonboss_left': [BASE + 2001], 'bosses': [BASE + 2000],
+                                  'turn': 7}
+        assert first['handover'] is None and first['unit_object'] == BASE + 1000
+        assert sorted(reads) == [BASE + 2000, BASE + 2001]
+        second = await service.execute('turn_next', {'sequence': 2})
+        assert second['clear']['nonboss_left'] == [BASE + 2001]
+        assert len(reads) == 2                               # names are cached
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_only_bosses_left_hands_over_cleared_and_locks_every_input(owned, tmp_path):
+    import json
+    sim, _ = named_sim({BASE + 2000: 'Mercurius'})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    handover = tmp_path / 'evidence' / 'handover.json'
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        drop(sim, BASE + 2001)                               # the last non-boss is destroyed
+        answer = await service.execute('turn_next', {'sequence': 2})
+        assert answer['handover'] == {'reason': 'cleared'}
+        assert answer['unit_object'] is None and answer['done'] is False
+        data = json.loads(handover.read_text(encoding='utf-8'))
+        assert data['reason'] == 'cleared' and data['nonboss_destroyed'] == [BASE + 2001]
+        assert data['bosses'][0]['name'] == 'Mercurius' and data['lost'] == []
+        for operation in INPUTS:
+            with pytest.raises(NavigationRefused, match='handed over'):
+                await service.execute(operation, frame(sequence=3, policy='', **request()))
+        assert (await service.execute('state', {'sequence': 3}))['sequence'] == 3
+        again = await service.execute('turn_next', {'sequence': 4})
+        assert again['handover'] == {'reason': 'cleared'} and again['unit_object'] is None
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_an_ally_loss_hands_over_before_the_next_unit(owned, tmp_path):
+    import json
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        drop(sim, BASE + 1001)                               # e.g. destroyed by a counter
+        answer = await service.execute('turn_next', {'sequence': 2})
+        assert answer['handover'] == {'reason': 'ally_lost'} and answer['unit_object'] is None
+        data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+        assert data['lost'] == [BASE + 1001]
+    asyncio.run(scenario())
+
+
+def test_a_stopped_turn_hands_over_with_its_reason(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim_with(start_ignored=True))
+
+    async def scenario():
+        failed = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert failed['phase'] == 'failed'
+        nxt = await service.execute('turn_next', {'sequence': 2})
+        assert nxt['handover'] == {'reason': f"stopped:{nxt['stopped']}"}
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('plan_act', frame(sequence=3, policy='', **request()))
+    asyncio.run(scenario())
+
+
+def test_an_unwritable_handover_report_is_reported_and_the_lock_holds(owned, tmp_path,
+                                                                       monkeypatch):
+    from pathlib import Path
+    sim, _ = named_sim({BASE + 2000: 'Mercurius'})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    real = Path.write_text
+
+    def locked(self, *args, **kwargs):
+        if self.name == 'handover.json':
+            raise PermissionError('locked')
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'write_text', locked)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        drop(sim, BASE + 2001)
+        answer = await service.execute('turn_next', {'sequence': 2})
+        assert answer['handover'] == {'reason': 'cleared'} and 'locked' in answer['report_error']
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('plan_act', frame(sequence=3, policy='', **request()))
+    asyncio.run(scenario())
+
+
 # ---- M10: End Turn and the enemy phase ------------------------------------------------------
 
 def phase_sim(**flags):
@@ -455,8 +581,8 @@ def test_a_whole_end_turn_reaches_the_next_player_phase_with_circle_only(owned, 
             step = await service.execute('enemy_phase', {'sequence': sequence})
             sequence += 1
         assert step['ok'] is True and step['phase'] == 'done' and step['turn'] == [7, 8]
-        again = await service.execute('enemy_phase', {'sequence': sequence})
-        assert again['phase'] == 'done'
+        with pytest.raises(NavigationRefused):        # M13: turn 8 is a new player turn
+            await service.execute('enemy_phase', {'sequence': sequence})
     asyncio.run(scenario())
     walk = adapter.sent.index('circle')               # the cursor walk, then only Circle
     assert set(adapter.sent[:walk]) <= {'up', 'down', 'left', 'right'}
@@ -528,6 +654,184 @@ def test_a_stopped_enemy_phase_reports_and_sends_nothing_more(owned, tmp_path):
     assert data['stopped'] == 'ally_destroyed' and data['destroyed'] == [BASE + 2]
 
 
+async def end_the_turn(service, frame, sequence):
+    """turn_next (done) -> End Turn open/confirm -> enemy_phase until not continue."""
+    assert (await service.execute('turn_next', {'sequence': sequence}))['done'] is True
+    await service.execute('end_turn', frame(sequence=sequence + 1, phase='open'))
+    await service.execute('end_turn', frame('system_menu', sequence=sequence + 2,
+                                            phase='confirm', highlighted_entry='EndTurn'))
+    sequence, step = sequence + 3, {'phase': 'continue'}
+    while step['phase'] == 'continue':
+        step = await service.execute('enemy_phase', {'sequence': sequence})
+        sequence += 1
+    return step, sequence
+
+
+def test_a_finished_enemy_phase_starts_a_new_player_turn(owned, tmp_path):
+    from psp_buddy import info_navigation
+    sim = phase_sim(screens=2)
+    service, adapter, frame = make(owned, tmp_path, sim)
+    evidence = tmp_path / 'evidence'
+
+    async def scenario():
+        step, seq = await end_the_turn(service, frame, 1)
+        assert step['phase'] == 'done' and step['turn'] == [7, 8]
+        assert (evidence / 'turn-report-7.json').is_file()
+        assert (evidence / 'enemy-phase-report-7.json').is_file()
+        sim.player_turn = 8                              # the allies are reset and stay so
+        nxt = await service.execute('turn_next', {'sequence': seq})
+        assert nxt['unit_object'] in (BASE + 1, BASE + 2) and nxt['remaining'] == 2
+        assert nxt['done'] is False and nxt['handover'] is None
+        assert nxt['clear']['turn'] == 8
+        with pytest.raises(NavigationRefused, match='turn done'):    # a fresh turn, not "started"
+            await service.execute('end_turn', frame(sequence=seq + 1, phase='open'))
+        guarded = await service.execute('plan_act', frame(sequence=seq + 1, policy='',
+                                                          protected=[BASE + 1],
+                                                          **request(unit_object=BASE + 1)))
+        assert guarded['phase'] == 'handover' and guarded['reason'] == 'protected'
+        for u in sim.units:                              # every ally has acted in turn 8
+            u['counted_as_unmoved'] = False
+        sim.screens = 2
+        step, seq = await end_the_turn(service, frame, seq + 2)
+        assert step['phase'] == 'done' and step['turn'] == [8, 9]
+        assert (evidence / 'turn-report-8.json').is_file()
+    asyncio.run(scenario())
+    assert info_navigation.MAX_PLAYER_TURNS == 6
+
+
+def test_the_per_turn_budgets_start_again_but_taps_and_dumps_do_not(owned, tmp_path):
+    from psp_buddy import info_navigation
+    sim = phase_sim(screens=2)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        service._acts = info_navigation.MAX_ACTS          # turn 7 used every act
+        service._taps, service._dumps = 3, 2
+        with pytest.raises(NavigationRefused):
+            await service.execute('plan_act', frame(sequence=2, policy='', protected=[BASE + 1],
+                                                    **request(unit_object=BASE + 1)))
+        step, seq = await end_the_turn(service, frame, 2)
+        assert step['phase'] == 'done'
+        sim.player_turn = 8
+        await service.execute('turn_next', {'sequence': seq})
+        guarded = await service.execute('plan_act', frame(sequence=seq + 1, policy='',
+                                                          protected=[BASE + 1],
+                                                          **request(unit_object=BASE + 1)))
+        assert guarded['reason'] == 'protected'
+        assert (service._taps, service._dumps) == (3, 2)
+    asyncio.run(scenario())
+
+
+def test_the_player_turn_limit_hands_over(owned, tmp_path, monkeypatch):
+    from psp_buddy import info_navigation
+    monkeypatch.setattr(info_navigation, 'MAX_PLAYER_TURNS', 1)
+    sim = phase_sim(screens=2)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        step, seq = await end_the_turn(service, frame, 1)
+        assert step['phase'] == 'done'
+        sim.player_turn = 8
+        nxt = await service.execute('turn_next', {'sequence': seq})
+        assert nxt['handover'] == {'reason': 'player_turn_limit'} and nxt['unit_object'] is None
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('plan_act', frame(sequence=seq + 1, policy='',
+                                                    **request(unit_object=BASE + 1)))
+    asyncio.run(scenario())
+
+
+def test_a_stopped_enemy_phase_hands_over_with_its_reason(owned, tmp_path):
+    import json
+    sim = phase_sim(screens=3, destroy_ally=True)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        step, seq = await end_the_turn(service, frame, 1)
+        assert step['phase'] == 'stopped' and step['reason'] == 'ally_destroyed'
+        nxt = await service.execute('turn_next', {'sequence': seq})
+        assert nxt['handover'] == {'reason': 'ally_destroyed'}
+        data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+        assert data['reason'] == 'ally_destroyed' and data['screen_state'] == 'after_stop'
+        assert data['lost'] == [BASE + 2]
+        sent = len(adapter.sent)
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('enemy_phase', {'sequence': seq + 1})
+        assert len(adapter.sent) == sent
+    asyncio.run(scenario())
+
+
+def test_an_unreadable_state_hands_over_instead_of_playing_on(owned, tmp_path):
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        sim.units[-1]['en'] = None                       # lost_allies cannot read this state
+        answer = await service.execute('turn_next', {'sequence': 2})
+        assert answer['handover'] == {'reason': 'state_unreadable'}
+        assert answer['unit_object'] is None
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('plan_act', frame(sequence=3, policy='', **request()))
+    asyncio.run(scenario())
+
+
+def test_the_player_turn_limit_locks_input_before_any_turn_next(owned, tmp_path, monkeypatch):
+    import json
+
+    from psp_buddy import info_navigation
+    monkeypatch.setattr(info_navigation, 'MAX_PLAYER_TURNS', 1)
+    sim = phase_sim(screens=2)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        step, seq = await end_the_turn(service, frame, 1)
+        sim.player_turn = 8
+        with pytest.raises(NavigationRefused, match='handed over'):
+            await service.execute('plan_act', frame(sequence=seq, policy='', protected=[BASE + 1],
+                                                    **request(unit_object=BASE + 1)))
+        await service.execute('turn_next', {'sequence': seq})
+    asyncio.run(scenario())
+    data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+    assert data['reason'] == 'player_turn_limit'
+    assert data['turn_reports'] == ['turn-report-7.json']
+    assert data['enemy_phase_reports'] == ['enemy-phase-report-7.json']
+
+
+def test_an_accepted_loss_does_not_leave_a_stale_enemy_phase_stop(owned, tmp_path):
+    sim = phase_sim(screens=3, destroy_ally=True)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        step, seq = await end_the_turn(service, frame, 1)
+        assert step['phase'] == 'stopped' and step['reason'] == 'ally_destroyed'
+        while step['phase'] != 'done':
+            step = await service.execute('enemy_phase', {'sequence': seq, 'accept_losses': True})
+            seq += 1
+        sim.player_turn = 8
+        nxt = await service.execute('turn_next', {'sequence': seq})
+        assert nxt['handover'] == {'reason': 'ally_lost'}     # the clear rule, not the old stop
+    asyncio.run(scenario())
+
+
+def test_turn_next_hands_over_at_the_turn_budget_after_five_turns(owned, tmp_path):
+    sim = phase_sim(screens=2)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        seq = 1
+        for turn in range(7, 12):                        # turns 7..11 are played
+            step, seq = await end_the_turn(service, frame, seq)
+            assert step['phase'] == 'done' and step['turn'] == [turn, turn + 1]
+            sim.player_turn = turn + 1
+            for u in sim.units:
+                u['counted_as_unmoved'] = False
+            sim.screens = 2
+        nxt = await service.execute('turn_next', {'sequence': seq})
+        assert nxt['handover'] == {'reason': 'turn_budget'} and nxt['clear']['turn'] == 12
+    asyncio.run(scenario())
+
+
 def test_enemy_phase_can_accept_a_loss_and_reach_the_next_turn(owned, tmp_path):
     import json
     sim = phase_sim(screens=3, destroy_ally=True)
@@ -549,6 +853,65 @@ def test_enemy_phase_can_accept_a_loss_and_reach_the_next_turn(owned, tmp_path):
     data = json.loads((tmp_path / 'evidence' / 'enemy-phase-report.json').read_text(
         encoding='utf-8'))
     assert data['done'] is True and data['losses'] == {str(BASE + 2): 'ally_destroyed'}
+
+
+def test_no_other_input_is_accepted_once_end_turn_has_started(owned, tmp_path):
+    # Spec: after End Turn only Circle (end_turn confirm, enemy_phase) may reach the game.
+    sim = phase_sim(screens=3)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def refused(sequence):
+        sent = len(adapter.sent)
+        for operation, body in (
+                ('plan_act', frame(sequence=sequence, policy='', **request())),
+                ('act', frame(sequence=sequence, **request(**MOVE_ATTACK))),
+                ('goto', frame(sequence=sequence, target=[1, 1]))):
+            with pytest.raises(NavigationRefused):
+                await service.execute(operation, body)
+        assert len(adapter.sent) == sent
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await refused(3)
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        await refused(4)
+    asyncio.run(scenario())
+
+
+def test_the_system_menu_can_still_be_backed_out_of_before_confirm(owned, tmp_path):
+    # Review 25 Oct: a wrong highlight on the MENU_SHOT must be escapable with Cross.
+    sim = phase_sim(screens=3)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        sent = len(adapter.sent)
+        await service.execute('press', frame('system_menu', sequence=3, button='cross',
+                                             duration=2, purpose='cancel'))
+        assert len(adapter.sent) > sent
+        with pytest.raises(NavigationRefused):     # the menu is closed: no confirm now
+            await service.execute('end_turn', frame('system_menu', sequence=4, phase='confirm',
+                                                    highlighted_entry='EndTurn'))
+    asyncio.run(scenario())
+
+
+def test_the_enemy_phase_is_not_cut_short_by_the_player_turn_press_budget(owned, tmp_path):
+    from psp_buddy import info_navigation
+    sim = phase_sim(screens=3)
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        service._act_presses = info_navigation.MAX_ACT_PRESSES     # the turn used it all
+        done = await service.execute('enemy_phase', {'sequence': 4})
+        assert done['phase'] == 'done' and done['turn'] == [7, 8]
+    asyncio.run(scenario())
 
 
 def spirit_sim():

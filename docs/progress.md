@@ -1,6 +1,6 @@
 # Project progress
 
-Updated 24 October 2026 (Australia/Brisbane).
+Updated 25 October 2026 (Australia/Brisbane).
 Ticks mean ready in the scope stated; unchecked items may have partial implementation.
 
 ## 1. Long-term goal
@@ -14,7 +14,7 @@ with protected progress, up to three checkpoint retries, and handover when neede
 - [ ] Follow tactical instructions and choose legal actions in a live battle.
 - [ ] Move and attack automatically. (Prototype: agent executes a declared, screenshot-grounded Move/Attack/Standby; it does not yet choose targets or plan.)
 - [ ] Handle enemy reactions and recognized decision-free dialogue automatically.
-- [ ] Save/load a live checkpoint and retry defeats automatically.
+- [ ] Save/load a live checkpoint and retry defeats automatically. (Save/load proven live 25 Oct; retry after a real loss not exercised; deprioritised by the user.)
 - [ ] Complete a battle and hand control back safely.
 
 MVP unit commands are Move and Attack. Healing, Spirit, Supply, Transform and crew
@@ -52,7 +52,7 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
 - [x] M6 Independent review, documentation and handover notes.
 - [ ] M8 Planner with forecast-gated auto-fire (21 Oct, design approved): [spec](superpowers/specs/2026-10-21-planner-design.md), [plan](superpowers/plans/2026-10-21-planner.md). Task 1 (damage table) done offline: no formula validated, fallback hit% x power ([note](research/2026-10-21-damage-model.md)). Task 2 done 21 Oct: `src/psp_buddy/tactics.py` (`plan_attack`) with `tests/unit/test_tactics.py` (20 tests, red first); uncommitted. Tasks 3-4 done offline 21 Oct: `src/psp_buddy/plan_act.py` (`plan_and_act`: plan, overlay read when nothing is in reach, run to forecast, gate, fire or back out, `damage-log.jsonl`), mailbox/`InfoNavigation` operation `plan_act`, node tool `ppsspp_plan_act`, handoff deadline (ignored local/). Forced-mismatch test passes; ruff, strict mypy, pytest 1340, node 8, helper 73 pass. Task 5 live (22 Oct, run local/move-attack-trial-20261017/m8b-run-20261021T201329, backups/m8live2-original-20261021T201329Z, 46/46 verified, originals unchanged after): from a policy text only, Destiny chose FlashEdge2 on Mercurius, forecast 47% (gate passed), fired in 46.7 s; EN 230->225, counter cleared, target HP 10507->6565 (one damage-log row, power 3400). Not exercised live: the move-range overlay path and a gate refusal (simulated only). A first attempt crashed PPSSPP because the memstick SCREENSHOT folder did not exist; create it before the first screenshot. Task 6 review (code-review, high) done 22 Oct: 9 findings, 8 fixed (no raised exceptions from plan_and_act, guarded damage log, `min_hit` gate exposed in `ppsspp_plan_act`, move EN reserved, overlay time guard, `moved` reported on decline, cleanups); the test-first note for plan_act.py was skipped. After fixes: pytest 1349, node 8, helper 73, ruff, strict mypy pass. Committed 4e859aa (pushed). Live re-check after the fixes (22 Oct, run m8d): Z Gundam fired a Grenade Launcher from its tile (missed, took a counter 4700->1007); another unit with `min_hit` 99 planned a move to (19,10), saw 30% and declined and backed out, proving the overlay, gate refusal and back-out live. M8 acceptance criteria all met; see [handover](research/2026-10-22-m8-handover.md). Later notes uncommitted.
 - [x] M9 Full player turn (22 Oct, design approved; done 23 Oct: turn 7 played live to `done`, 19 fired, 1 skipped, stopped before End Turn; review fixed): [spec](superpowers/specs/2026-10-22-turn-design.md), [plan](superpowers/plans/2026-10-22-turn.md). Tasks 1-3 done offline: `src/psp_buddy/turn.py` (`ready_allies`, `TurnLog`, `next_unit`, `report`), read-only operation `turn_next` + tool `ppsspp_turn_next`, `turn-report.json` per trial, budgets 40 acts / 1000 presses; red tests first (test_turn.py 19, navigation tests); pytest 1372, node 8, helper 73, ruff, strict mypy pass. Task 4 live (22 Oct) in progress: best run handled units 1-11 of 21 (9 fired, 1 skipped), stopped at Force Impulse (target-select cursor stall). Live fixes with tests: Hit and Away Standby (skill 20), hit chance >100, hidden weapon rows / will, re-plan on refused weapon, budgets. Evening: Force Impulse cause found (menu lists weapons by power, not slot order) and fixed with tests; re-run stopped at Strike Freedom (Start not confirmed, game still in target select). 23 Oct: menu rows follow shown power (MAP weapons and the hidden byte-26/placeholder rows modelled, MAP never chosen), MVP Standby after a failed or declined move; live run m9livex10 completed turn 7 (`done`); code-review high: 6 fixed, 2 minor skipped. Uncommitted. See [M9 handover](research/2026-10-22-m9-handover.md). Uncommitted.
-- [ ] M10 End Turn and enemy phase (23 Oct, design approved): [spec](superpowers/specs/2026-10-23-end-turn-design.md), [plan](superpowers/plans/2026-10-23-end-turn.md). Implemented with tests (`end_turn.py`, operations `end_turn`/`enemy_phase`). Live: End Turn works; the enemy phase destroys Gundam 00 (turn-7 play leaves it at 873 HP), strict stop works; accepting losses walked into the stage's defeat (trial copy only) -> `scene_after_loss` and `stage_restart` stops added. Turn 8 reached live in strict mode after the M11 turn-7 policy (run m11live18, no ally lost). M10's own review pending. Uncommitted.
+- [x] M10 End Turn and enemy phase (23 Oct, design approved; closed 25 Oct): [spec](superpowers/specs/2026-10-23-end-turn-design.md), [plan](superpowers/plans/2026-10-23-end-turn.md). Implemented with tests (`end_turn.py`, operations `end_turn`/`enemy_phase`). Live: End Turn works; the enemy phase destroys Gundam 00 (turn-7 play leaves it at 873 HP), strict stop works; accepting losses walked into the stage's defeat (trial copy only) -> `scene_after_loss` and `stage_restart` stops added. Turn 8 reached live in strict mode after the M11 turn-7 policy (run m11live18, no ally lost). Code review (high, 25 Oct): 8 findings; fixed red-first: no press/goto/act/plan_act/probe_move once End Turn has started; units gone from the list (live: destroyed units vanish) reported as `lost`/destroyed; one unreadable read is re-read before any Circle (a camera pan over the T+1 map); a scene at the start of T+1 stops as `scene_at_new_turn` (the T+1 wait is now `_new_turn`, 2 finished reads in a row, up to 20 reads); enemy-phase Circles no longer count against the player turn's 1000-press budget (capped by `PHASE_PRESSES`). No change: a failed open cannot re-open (adapter errors disable the helper). Skipped (minor): the report's `screens` list stays empty (screenshots are taken outside the helper). Checks: pytest 1528 / 1 skipped, helper 189, node 8, ruff, strict mypy. Not re-run live after these fixes. Uncommitted.
 - [x] M11 Turn-7 policy: Sense first then Focus before each planned attack, non-boss foes before bosses (bosses by name
   Mercurius/Vayeate/Wing Gundam Zero or max HP >= 2x foe median) (23 Oct, design approved): [spec](superpowers/specs/2026-10-23-spirit-boss-policy-design.md),
   [plan](superpowers/plans/2026-10-23-spirit-boss-policy.md). Task 1 done (red first): `spirit_recon` declaration and
@@ -87,9 +87,63 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
   memstick); replaying the enemy phase from it takes about 8 minutes and reproduced turn 8 (run m11cp4). See
   [recon](research/2026-10-23-spirit-recon.md). Checks: pytest 1522 / 1 skipped, helper 189, node 8, ruff, strict
   mypy. Uncommitted.
+- [x] M12 Live checkpoint and retries, turns 7 -> 8 (25 Oct; closed early by the user's scope change, see below): [spec](superpowers/specs/2026-10-25-checkpoint-retry-design.md), [plan](superpowers/plans/2026-10-25-checkpoint-retry.md). Live, every run protected (backup 54/54 verified, graceful close, originals unchanged): Task 2 ids proven on screens (Wing Gundam Zero pilot page: Guard 15, Alert 10, Strike 20, Bless 45 -> id 3 Alert, id 5 Guard = the code's Invincible) and one Alert cast (SP 19 -> 4, mask 0x04). Task 6: `local/m12-tools/save_checkpoint.ps1` saved turn 7 start via File > Savestate slot 3 > Save state (a capture per step) to `local/checkpoints/turn7-start` + manifest (`retry.manifest`); relaunches matched it exactly (`mismatches == []`, three times). Task 7 attempt 1 (run m12try1): turn 7 `done` (15 fired, 7 skipped, spirits Sense/Focus cast and verified), End Turn, strict enemy phase -> **turn 8, no ally lost**, every non-boss foe cleared (Gundam 00 5000 -> 364, deterministic). A forced retry was recorded in the ledger (`local/m12-retry/run1/retry-report.json`) but attempt 2 was not run: the user stopped there. Task 8 code review (high): 6 findings; fixed red-first: losses to a counter in the player turn now count (`retry.lost_allies`, a done phase with a lost ally is a defeat), Cross out of the End Turn system menu before confirm allowed again; also key focus guard in the save tool, constant in a message. Skipped minor: Invincible bit 0x10 unobserved; node `info_page` test not seen red first. Checks: pytest 1565 / 1 skipped, helper 190 (one unexplained intermittent failure, 4 reruns clean), node 8, ruff, strict mypy. Not exercised live: a real reload after a loss.
+- **Scope change (user, 25 Oct):** the auto-runner clears the map of non-boss robots, then hands control back to the player, who fights the bosses with more complex skills and may lose allies. Retries are no longer the next step.
 - [x] M7 Speed (21 Oct): reads after the baseline skip the 26 immutable code anchors (14-19 s -> 1.1 s) and `read_state` takes units and map in one pause. A fired act (move + attack, Destiny vs Mercurius) takes about 45 s (24.6 s to the forecast, 20.5 s to fire), was about 160 s. The under-30-s goal is not met; further tuning (fewer reads, shorter settles) is deferred by choice. See [read profile](research/2026-10-21-read-profile.md), [spec](superpowers/specs/2026-10-21-speed-design.md), [plan](superpowers/plans/2026-10-21-speed.md). Code lives in ignored local/ files (collector.py, navigation_handoff.py), helper tests 182 pass; uncommitted.
 
-## 3. Today/session goal — 20 October
+## 3. Today/session goal — 25 October
+
+- [x] Review M10 (code-review high) and fix its Important findings red-first; tick M10.
+- [x] Design the next milestone with the user (M12 checkpoint + retries, spirit chain added).
+- [x] M12 offline tasks 1, 3, 4, 5 (spirit order, protected units, retry ledger).
+- [x] M12 live: spirit ids proven, turn-7 checkpoint saved and reloaded, turn 7 -> 8 with no ally lost; review fixed.
+
+- [x] M13 designed with the user (clear non-bosses, then hand over): [spec](superpowers/specs/2026-10-25-nonboss-clear-handover-design.md),
+  [plan](superpowers/plans/2026-10-25-nonboss-clear-handover.md). Decisions: check after every action and
+  enemy phase, stop at once on an ally loss, hand over on the map with `handover.json` (no savestate), bosses
+  still attacked when nothing else is in reach, check inside `turn_next`, 5-turn budget, boss set fixed at start.
+  Found: the helper allows only one End Turn per trial, so multi-turn play needs a new-turn reset (plan Task 3).
+
+  Spec approved by the user (25 Oct). Task 1 done offline (red first): `src/psp_buddy/clear.py` (`begin` fixes
+  the boss set, `nonboss_left`, `decide` = ally_lost > cleared > turn_budget, `handover_report`) with
+  `tests/unit/test_clear.py` (12). A late foe counts as a boss only by name, and only once its name is in the cache.
+
+  Task 2 done offline (red first): `turn_next` reads foe names once (shared cache), fixes the `ClearRun` at
+  its first call, and answers `clear` {nonboss_left, bosses, turn} and `handover` (cleared / ally_lost /
+  turn_budget / `stopped:<reason>`). A new handover writes `handover.json` once; after it every input operation
+  is refused, while reads and `turn_next` still answer (5 tests in `test_act_navigation.py`, 1 in `test_clear.py`).
+
+  Task 3 done offline (red first): an enemy phase that ends `done` starts a new player turn in the same helper.
+  It keeps `turn-report-<T>.json` and `enemy-phase-report-<T>.json`, starts a fresh TurnLog, and allows End Turn
+  again. The budgets in `PER_TURN` (state/weapon/hit/target reads, probes, acts, act and goto presses) count per
+  turn; taps and dumps stay per trial; `MAX_PLAYER_TURNS = 6` hands over `player_turn_limit`. A stopped enemy
+  phase makes the next `turn_next` hand over with its reason (`handover.json` `screen_state: after_stop`).
+  The End Turn simulator now has `player_turn` in place of a hard-coded turn 7. One M10 test changed on
+  purpose: after `done`, a repeat `enemy_phase` is refused (4 new tests).
+
+  Tasks 4-6 done offline (node description; the helper never closes PPSSPP; driver
+  `local/m13-tools/clear_loop.py` + dry-run tests; code review high: 8 findings, 7 fixed red-first, 1 skipped).
+  Checks: pytest 1593 / 1 skipped, helper + driver 196, node 8, ruff, strict mypy. Task 7 (live) is blocked before
+  launch: the backup gate refuses as "stale receipt" because `Get-NetTCPConnection` now takes 11-15+ s. No
+  emulator ran; originals unchanged; backups m13live1/m13live2 are verified. See
+  [M13 handover](research/2026-10-25-m13-handover.md).
+
+  User chose the netstat listener check: done red-first (`WindowsInspector.listeners`, 8 tests; 0.16 s live).
+  Live attempts m13live3-5: Windows was under heavy load (Defender scanning the fresh backups). Two refused
+  before spawn (CIM process check over 15 s). m13live4 ran turn 7 with memory reads at 5-9 s: 2 fired, then
+  act time budgets ran out and the helper disabled itself; no ally lost; closed gracefully; originals unchanged.
+  **26 Oct, run m13live6 (machine quiet): M13 live acceptance passed.** From `turn7-start` (backup 54/54, checkpoint
+  `MISMATCHES []`), turn 7: 14 fired, and it handed over `cleared` mid-turn with no ally lost. The game is on the
+  map with no menu and 7 allies unmoved, `handover.json` matches the screen, and PPSSPP is left open for the
+  player. Under the "attack bosses if nothing else" rule, both bosses also left the unit list (destroyed or
+  withdrew), so this checkpoint leaves no boss for the human. Not yet live: a second player turn.
+
+User decision (26 Oct): keep the current boss rule; M13 is done. The player takes over from the m13live6
+handover and attacks the bosses themselves from now on. Optional later: a live check of the multi-turn path.
+Everything since commit d0bfb04 is uncommitted.
+
+## Session goal history — 20 October
+
 
 - [x] Decode where weapon data lives in memory (weapon records, unit weapon lists, ammo, pilot skills).
 - [x] Build `ppsspp_read_weapons` (memory-only) and verify it live against the Destiny and Z Gundam weapon screens.

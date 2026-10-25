@@ -240,6 +240,43 @@ def test_spirit_recon_declaration_is_exact(owned, tmp_path, bad):
         setup(owned, tmp_path, bad)
 
 
+INFO_RECON = {'unit': 'Wing Gundam Zero', 'actions': ['info_recon']}
+
+
+def test_info_recon_opens_and_pages_a_status_screen_only(owned, tmp_path):
+    # M12 Task 2: name the spirits of a third-force pilot from its status pages, view only.
+    service, transport, frame, _ = setup(owned, tmp_path, INFO_RECON)
+
+    async def scenario():
+        await press(service, frame, 1, 'map', 'open_unit_menu', cursor_tile=[19, 5])
+        await press(service, frame, 2, 'info', 'info_page', button='right')
+        await press(service, frame, 3, 'info', 'info_page', button='left')
+        for seq, purpose, context, extra in (
+                (4, 'info_page', 'info', dict(button='circle')),
+                (4, 'info_page', 'unit_commands', dict(button='right')),
+                (4, 'open_spirit', 'unit_commands', dict(highlighted_entry='Spirit')),
+                (4, 'open_attack', 'unit_commands', dict(highlighted_entry='Attack')),
+                (4, 'open_move', 'unit_commands', dict(highlighted_entry='Move')),
+                (4, 'dismiss_result', 'result', {})):
+            with pytest.raises(ValueError):
+                await press(service, frame, seq, context, purpose, **extra)
+        await press(service, frame, 4, 'info', 'cancel', button='cross')
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('declaration', [None, SPIRIT_RECON, RECON])
+def test_info_page_needs_the_info_recon_declaration(owned, tmp_path, declaration):
+    service, transport, frame, _ = setup(owned, tmp_path, declaration)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, 'info', 'info_page', button='right'))
+    assert not transport.sent
+
+
+def test_info_recon_declaration_is_exact(owned, tmp_path):
+    with pytest.raises(ValueError):
+        setup(owned, tmp_path, {**INFO_RECON, 'spirit_name': 'Alert'})
+
+
 MOVE_ATTACK = {'unit': 'Z Gundam', 'actions': ['move', 'attack'], 'destination_tile': [14, 15],
                'weapon_name': 'Beam Rifle', 'target_name': 'tile(12,17)'}
 
