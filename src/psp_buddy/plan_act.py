@@ -47,15 +47,27 @@ async def _back_out(io: act.ActIO, presses: int) -> bool:
 async def _standby(io: act.ActIO, unit_object: int) -> bool:
     """MVP rule (user, 22 Oct): a moved unit that cannot finish its attack waits.
 
-    After the back-out the post-move menu is up with Attack highlighted and Standby below it
-    (22 Oct live screen). Memory confirms the unit is done; otherwise Cross closes whatever opened
-    and False is reported (never raised).
+    After the back-out the post-move menu is up with Attack highlighted and Standby last (22 Oct
+    live: Attack / Standby; 26 Oct stage 33, Methuss: Attack / Repair / Standby). The menu wraps
+    (31 Oct recon m14rec3), so one Up reaches Standby whatever the length. With the post-move
+    menu read (its own slot; the Command-menu slot keeps the earlier menu) Up is pressed only
+    from Attack and Circle only once the cursor is seen on the last entry. Memory confirms the
+    unit is done; otherwise Cross closes whatever opened and False is reported (never raised).
     """
     if io.time_left() < STANDBY_NEEDS:
         return False                   # the helper's hard cancel must never hit an open menu
+    reader = getattr(io, "post_move_menu", None)
     try:
-        await io.press("down", 2)
+        if reader is not None:
+            menu = await reader()
+            if menu is None or menu[0] != 0 or menu[1] < 2:
+                return False
+        await io.press("up", 2)
         await io.sleep(0.3)
+        if reader is not None:
+            menu = await reader()
+            if menu is None or menu[0] != menu[1] - 1:
+                return False
         await io.press("circle", 2)
         for _ in range(STANDBY_POLLS):
             await io.sleep(0.6)
@@ -205,7 +217,7 @@ async def _bosses(io: act.ActIO, names: Collection[str],
     units: list[Mapping[str, Any]] = state.get("units", [])     # type: ignore[assignment]
     for unit in units:
         obj = unit.get("object")
-        if (unit.get("raw_menu_group_byte") == targets.ENEMY_GROUP and type(obj) is int
+        if (targets.is_foe(unit.get("raw_menu_group_byte")) and type(obj) is int
                 and obj not in cache):
             try:
                 cache[obj] = str((await io.read_weapons(obj)).get("mech_name", ""))
@@ -256,8 +268,18 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
         # After a confirmed Move, a weapon/target/forecast failure backs out to the post-move menu
         # (other stages leave the screen unknown, so nothing more is pressed there).
         stages: list[Mapping[str, Any]] = first.get("stages", [])  # type: ignore[assignment]
-        if (moved and failed_at in REPLAN_STAGES
-                and any(s.get("stage") == "move" for s in stages)):
+        # A Move that landed on another tile also leaves the post-move menu up (31 Oct live,
+        # m14s33h); `_standby` presses only once its own menu read shows that menu.
+        facts: Mapping[str, Any] = first.get("facts") or {}   # type: ignore[assignment]
+        units: list[Mapping[str, Any]] = state.get("units", [])  # type: ignore[assignment]
+        unit: Mapping[str, Any] = next(
+            (u for u in units if u.get("object") == unit_object), {})
+        start = [unit.get("tile_x"), unit.get("tile_y")]
+        elsewhere = (failed_at == "move" and first.get("reason") == "move_not_confirmed"
+                     and facts.get("tile") is not None and None not in start
+                     and facts.get("tile") != start)
+        if ((moved and failed_at in REPLAN_STAGES
+             and any(s.get("stage") == "move" for s in stages)) or elsewhere):
             failed["standby"] = await _standby(io, unit_object)
         return failed
     # Menus open at the forecast: select, [attack menu], weapon list and forecast (a Move closes

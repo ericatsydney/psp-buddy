@@ -1,6 +1,6 @@
 # Project progress
 
-Updated 25 October 2026 (Australia/Brisbane).
+Updated 31 October 2026 (Australia/Brisbane).
 Ticks mean ready in the scope stated; unchecked items may have partial implementation.
 
 ## 1. Long-term goal
@@ -139,8 +139,79 @@ Goal: from one tactical instruction the agent reads the live battle state, choos
   withdrew), so this checkpoint leaves no boss for the human. Not yet live: a second player turn.
 
 User decision (26 Oct): keep the current boss rule; M13 is done. The player takes over from the m13live6
-handover and attacks the bosses themselves from now on. Optional later: a live check of the multi-turn path.
-Everything since commit d0bfb04 is uncommitted.
+handover and attacks the bosses themselves from now on. Committed and pushed as 9c4d836.
+
+- [ ] M14 Other stages (26 Oct, in progress; user: "don't assume" any robot is on a map). Boss list for all
+  105 Saisei-hen scenarios ([note](research/2026-10-26-saisei-hen-bosses.md) + JSON, from atwiki). Offline
+  save-state reader (Snappy unpack + project collector) showed the user's slot 2 is stage 33
+  (pillar fragments). Generalized red-first: foe = menu group // 4 == 3 (`targets.is_foe`); startup fixture
+  and anchor ally from the checkpoint manifest; `close_command_menu` (start-of-run back-out only); cursor
+  via pointer [0x08E4EA90]+0x24 (per-map address); compact non-player state rows, no 64-unit cap;
+  hover hit raw up to 399 (fragments read 261). Live stage 33 (m14s33c, checkpoint `stage33-slot2`, backup
+  54/54, `MISMATCHES []`): the back-out worked, then every attack failed `target_not_hittable` (the 261
+  bug, fixed after the run). The last unit (Methuss) had moved, so the runner stopped with its post-move
+  menu (Attack/Repair/Standby) open.
+
+## 3. Today/session goal — 26 October
+
+- [x] M13 live acceptance passed (m13live6); committed and pushed (9c4d836).
+- [x] Boss list for every stage; stage-33 save decoded offline; group/fixture/cursor/size generalized.
+- [ ] Stage-33 live run: blocked by the hit decode (fixed) and a menu left open after a failed post-move attack.
+
+Next step (27 Oct): (1) find the one failing test in the full suite after the hit-bound change (the run was
+stopped; helper 200, node 8, ruff, mypy pass); (2) red-first: a failed attack after a move must end cleanly
+(MVP Standby, or undo the move), never hand over with a menu open; (3) close PPSSPP gracefully (it is open
+on the m14s33c trial copy, helper idle with input refused), then rerun stage 33 from `stage33-slot2`
+(backups first; back out with target_select/weapon_list `cancel`, `close_command_menu`, move_range `cancel`).
+Uncommitted since 9c4d836: the M14 changes, the boss list and these notes.
+
+## 3. Today/session goal — 31 October
+
+- [x] Full suite green again: the one failure was a stale test (raw 399 is now a valid uncapped hit; 401 is not).
+- [x] A failed attack after a move ends cleanly in Standby. First try (Command-menu read) disproved live in
+  m14s33f: 0x08E4BE34 keeps the unit's earlier Command menu. Recon m14rec3 (Destiny moved to (5,17) on stage 33,
+  6 RAM dumps, screenshot per press): the menu **wraps** (Down from Standby -> Attack, Up from Attack -> Standby),
+  and the post-move menu has its own slot **0x08E4BEB4** (u32 count, u32 row; slots are 0x80 apart). Fix,
+  red-first: `_standby` reads that slot (`post_move_menu`, wired through `InfoNavigation` and the local
+  helper), presses Up once from row 0 and Circles only when row = count - 1.
+- [x] Live re-check m14s33g (backup 54/54, originals 0/54 changed, `MISMATCHES []`): the m14s33f stop case now
+  ends `standby`; turn 5 `done` (14 fired, 2 no target), End Turn + enemy phase -> turn 6, 17 more fired, **no
+  ally lost**, non-boss foes 41 -> 18. Stopped `spirit_menus_not_closed` (new bug, below). PPSSPP left open on the
+  trial copy with Wing Gundam Zero's Hit&Away Move/Standby menu up.
+
+- [x] Continue + Hit&Away (Wing Gundam Zero), red-first from the live logs (m14s33g, m14s33m): a kill made
+  without moving goes straight to the Hit&Away Move / Standby menu; Circle there shows the Move range, then Cross,
+  Down, Circle = Standby; then the kill's result pages and Continue's bonus step follow, with the range lingering.
+  `act.result` no longer treats a range centred on the unit as the map before that Standby (`ha_range`), and lets
+  the Continue path decide after it. Live m14s33n: both Wing Zero attacks fired and the run went on.
+- [x] Late cursor drift before the Move Circle (m14s33h: planned (8,16), moved to (8,15)): `act.move` re-reads the
+  cursor and re-walks (`CURSOR_CHECKS = 3`, else `cursor_not_on_destination` and back out); a move that still
+  lands elsewhere ends with the verified Standby (`plan_act`, `elsewhere`).
+- [ ] Stage 33 two-turn clear: m14s33n reached turn 6 with no ally lost (foes 41 -> 18, 14 + 18 fired), then
+  stopped `cursor did not reach the unit`: the per-turn cursor budget `MAX_GOTO_PRESSES = 400` ran out after
+  about 22 plan_acts (the message still says "trial"). User decision (31 Oct): keep 400.
+
+Live-run notes: m14s33i lost its helper on a plain press ("protected navigation failed", unexplained, nothing
+sent); m14s33j/l refused before spawn under load and m14s33k overran an act deadline (reads 2.4 s): wait for CPU
+< 35% after each launch (Defender scans every new backup) before checking and playing. PPSSPP is left open on the
+m14s33n trial copy, on the map with no menu; at session end it was found already closed (no crash event),
+and the originals matched the m14s33n backup (0/54 changed).
+
+Review (manual, 31 Oct diff of act.py, plan_act.py, spirit_cast.py, helper reader): no Critical/Important.
+Minor: `_standby` gives up without a Cross when the post-move read shows the wrong row after Up (the turn still
+stops safely); the cursor-budget refusal text says "trial" although the budget is per turn.
+
+Lessons: launch `restart.ps1` detached (WMI `Win32_Process Create`); a shell-launched PPSSPP died with the call
+(m14s33e). Long background greps over `local/` starve the backup gate (m14s33d). A move/standby declaration may
+name "Destiny" = the checkpoint anchor (local helper fix, test first).
+
+Next step: with the 400-press budget kept, the runner stops when a long turn uses it up. Options for the
+next session: spend fewer cursor presses per action (e.g. skip the map-proof walk where memory already proves
+the map), or accept the stop and hand over mid-turn as `turn_budget`-style handover (not a stop with a reason).
+Rerun stage 33 from `stage33-slot2` as before (back-out: target_select cancel, weapon_list cancel,
+close_command_menu, move_range cancel; goto (19,17); `clear_loop.py 7`). See
+[31 Oct handover](research/2026-10-31-m14-handover.md).
+Checks now: pytest 1628 / 1 skipped, helper 195, node 8, ruff, strict mypy. Uncommitted since 9c4d836.
 
 ## Session goal history — 20 October
 

@@ -37,6 +37,9 @@ LIST_DEPTH = 2           # Command menu + spirit list: two Crosses back to the m
 EXTRA_CROSSES = 2        # more Crosses while the cursor proves a menu is still open
 COMMAND_MENU_ADDRESS = 0x08E4BE34    # u32 entry count, then u32 cursor row (24 Oct dumps)
 COMMAND_MENU_BYTES = 8
+# The post-move menu (Attack / ... / Standby) has its own slot 0x80 on, same layout; the slot
+# above keeps the earlier Command menu meanwhile (31 Oct recon m14rec3, six RAM dumps).
+POST_MOVE_MENU_ADDRESS = 0x08E4BEB4
 SPIRIT_ROW_BY_COUNT = {4: 2}         # Move / Attack / Spirit / Info (23 Oct screen, 7 casts 24 Oct)
 # (entries, Spirit row) per mech, each from a screenshot of its Command menu.
 SPIRIT_ROW_BY_MECH = {"Z Gundam": (5, 3)}     # Move / Attack / Morph / Spirit / Info, 24 Oct

@@ -11,7 +11,11 @@ MAX_CELLS = 1024                    # the game's cell window is 0x4000 bytes (10
 MAX_TURN = 999
 CELL_TABLE_ADDRESS = 0x08E4EA94
 MAP_WIDTH_ADDRESS = 0x08E52A94      # u16 width, u16 height follow each other
-CURSOR_ADDRESS = 0x096007C4         # u16 x, u16 y
+CURSOR_ADDRESS = 0x096007C4         # u16 x, u16 y on stage 23 only; read via CURSOR_POINTER_ADDRESS
+# 26 Oct: the cursor struct is allocated per map (stage 33: 0x0964BAF4). The u32 just before the
+# cell table points 0x24 below it: checked on 13 stage-23 dumps, 3 stage-33 dumps and 3 user saves.
+CURSOR_POINTER_ADDRESS = 0x08E4EA90
+CURSOR_OFFSET = 0x24
 TURN_ADDRESS = 0x08DF8ADC           # u16 turn, u16 running total
 TERRAIN_CLASSES = {1: "space", 2: "asteroid", 18: "debris"}
 _DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -69,6 +73,16 @@ def reachable_tiles(state: dict[str, object]) -> list[dict[str, int]]:
                 result.append({"x": x, "y": y, "cost": _DIGITS.index(symbol) if symbol in _DIGITS
                                else -1})
     return result
+
+
+def cursor_address(pointer: bytes) -> int:
+    """Address of the u16 x, y cursor pair from the 4-byte pointer at CURSOR_POINTER_ADDRESS."""
+    if len(pointer) != 4:
+        raise ValueError("cursor pointer needs 4 bytes")
+    address = int.from_bytes(pointer, "little") + CURSOR_OFFSET
+    if not 0x08800000 <= address <= 0x0A000000 - 4:
+        raise ValueError("cursor pointer outside PSP user RAM")
+    return address
 
 
 def decode_cursor(blob: bytes, width: int, height: int) -> dict[str, int]:

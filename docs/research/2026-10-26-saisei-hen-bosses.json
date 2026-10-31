@@ -1,0 +1,2394 @@
+{
+ "source": "https://w.atwiki.jp/srwz2nd2/pages/15.html (scenario pages, read 26 Oct 2026)",
+ "game": "Super Robot Wars Z2 Saisei-hen (ULJS00460)",
+ "rule": "boss = an enemy-data row whose pilot is a named character, not a generic grunt label",
+ "hp_note": "HP as listed on the wiki; values in brackets there are Hard mode",
+ "english_names": "best-effort fan English; unverified against the English patch v0.8 in-game names",
+ "stages": [
+  {
+   "stage": "プロローグA",
+   "title": "ブラックリベリオン",
+   "atwiki_page": 60,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/60.html",
+   "bosses": [
+    {
+     "mech_ja": "ランスロット・エアキャバルリー",
+     "mech_en": "Lancelot Air Cavalry",
+     "pilot_ja": "スザク",
+     "hp_hard": "5900"
+    },
+    {
+     "mech_ja": "グロースター",
+     "mech_en": "Gloucester",
+     "pilot_ja": "コーネリア",
+     "hp_hard": "5800"
+    },
+    {
+     "mech_ja": "グロースター",
+     "mech_en": "Gloucester",
+     "pilot_ja": "ギルフォード",
+     "hp_hard": "5600"
+    },
+    {
+     "mech_ja": "ジークフリート",
+     "mech_en": "Siegfried",
+     "pilot_ja": "ジェレミア",
+     "hp_hard": "6600"
+    }
+   ]
+  },
+  {
+   "stage": "プロローグB",
+   "title": "ガンダム殲滅指令",
+   "atwiki_page": 67,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/67.html",
+   "bosses": [
+    {
+     "mech_ja": "GN-X",
+     "mech_en": "GN-X",
+     "pilot_ja": "セルゲイ",
+     "hp_hard": "5800"
+    },
+    {
+     "mech_ja": "GN-X",
+     "mech_en": "GN-X",
+     "pilot_ja": "ピーリス",
+     "hp_hard": "5800"
+    },
+    {
+     "mech_ja": "GN-X",
+     "mech_en": "GN-X",
+     "pilot_ja": "コーラサワー",
+     "hp_hard": "5800"
+    },
+    {
+     "mech_ja": "トールギス",
+     "mech_en": "Tallgeese",
+     "pilot_ja": "ゼクス",
+     "hp_hard": "8000"
+    },
+    {
+     "mech_ja": "トーラス",
+     "mech_en": "Taurus",
+     "pilot_ja": "ノイン",
+     "hp_hard": "5000"
+    }
+   ]
+  },
+  {
+   "stage": "プロローグC",
+   "title": "世界最後の日",
+   "atwiki_page": 68,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/68.html",
+   "bosses": []
+  },
+  {
+   "stage": "第1話",
+   "title": "ファイティング・ガール",
+   "atwiki_page": 69,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/69.html",
+   "bosses": []
+  },
+  {
+   "stage": "第2話",
+   "title": "逃亡者",
+   "atwiki_page": 70,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/70.html",
+   "bosses": []
+  },
+  {
+   "stage": "第3話",
+   "title": "太陽の使者・鉄人28号",
+   "atwiki_page": 71,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/71.html",
+   "bosses": [
+    {
+     "mech_ja": "ブランチロボ1号",
+     "mech_en": "Branch Robot No.1",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "16000"
+    }
+   ]
+  },
+  {
+   "stage": "第4話",
+   "title": "竹尾ゼネラルカンパニー奮戦記",
+   "atwiki_page": 94,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/94.html",
+   "bosses": [
+    {
+     "mech_ja": "ブランチロボ1号",
+     "mech_en": "Branch Robot No.1",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "17050"
+    }
+   ]
+  },
+  {
+   "stage": "第4話",
+   "title": "セカンド・カミング",
+   "atwiki_page": 264,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/264.html",
+   "bosses": []
+  },
+  {
+   "stage": "第4話",
+   "title": "迷える戦士達",
+   "atwiki_page": 93,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/93.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "14750"
+    }
+   ]
+  },
+  {
+   "stage": "第4話",
+   "title": "アッセンブルEX-10",
+   "atwiki_page": 72,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/72.html",
+   "bosses": []
+  },
+  {
+   "stage": "第5話",
+   "title": "広報2課の憂鬱",
+   "atwiki_page": 96,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/96.html",
+   "bosses": [
+    {
+     "mech_ja": "ピラミッド",
+     "mech_en": "Pyramid",
+     "pilot_ja": "ヘテロダイン",
+     "hp_hard": "17050"
+    }
+   ]
+  },
+  {
+   "stage": "第5話",
+   "title": "トゥウインクル・スター",
+   "atwiki_page": 265,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/265.html",
+   "bosses": []
+  },
+  {
+   "stage": "第5話",
+   "title": "OZとアロウズ",
+   "atwiki_page": 111,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/111.html",
+   "bosses": [
+    {
+     "mech_ja": "百式",
+     "mech_en": "Hyaku Shiki",
+     "pilot_ja": "クワトロ",
+     "hp_hard": "16750"
+    },
+    {
+     "mech_ja": "トールギス",
+     "mech_en": "Tallgeese",
+     "pilot_ja": "ゼクス",
+     "hp_hard": "17750"
+    }
+   ]
+  },
+  {
+   "stage": "第5話",
+   "title": "渦中",
+   "atwiki_page": 73,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/73.html",
+   "bosses": []
+  },
+  {
+   "stage": "第6話",
+   "title": "登場！ドイツの鬼伯爵！",
+   "atwiki_page": 98,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/98.html",
+   "bosses": []
+  },
+  {
+   "stage": "第6話",
+   "title": "忍び寄る脅威",
+   "atwiki_page": 274,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/274.html",
+   "bosses": [
+    {
+     "mech_ja": "グルダー",
+     "mech_en": "Gruder",
+     "pilot_ja": "ゲル",
+     "hp_hard": "18850"
+    }
+   ]
+  },
+  {
+   "stage": "第6話",
+   "title": "彷徨う天使達",
+   "atwiki_page": 113,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/113.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "19250"
+    },
+    {
+     "mech_ja": "GN-XⅢ",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "6750"
+    },
+    {
+     "mech_ja": "GN-XⅢ",
+     "mech_en": "GN-X III",
+     "pilot_ja": "ルイス",
+     "hp_hard": "6750"
+    }
+   ]
+  },
+  {
+   "stage": "第6話",
+   "title": "介入",
+   "atwiki_page": 77,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/77.html",
+   "bosses": [
+    {
+     "mech_ja": "スナッピングタートル",
+     "mech_en": "Snapping Turtle",
+     "pilot_ja": "イプシロン",
+     "hp_hard": "10250"
+    },
+    {
+     "mech_ja": "ダイビングビートル",
+     "mech_en": "Diving Beetle",
+     "pilot_ja": "カン・ユー",
+     "hp_hard": "9250"
+    }
+   ]
+  },
+  {
+   "stage": "第7話",
+   "title": "対決！悲しみの青きドナウ！",
+   "atwiki_page": 106,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/106.html",
+   "bosses": [
+    {
+     "mech_ja": "ドナウα1",
+     "mech_en": "Donau Alpha 1",
+     "pilot_ja": "ドナウα1",
+     "hp_hard": "17250"
+    }
+   ]
+  },
+  {
+   "stage": "第7話",
+   "title": "次元歪曲宙域",
+   "atwiki_page": 278,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/278.html",
+   "bosses": [
+    {
+     "mech_ja": "バキューム",
+     "mech_en": "Vacuum",
+     "pilot_ja": "バレン",
+     "hp_hard": "19350"
+    },
+    {
+     "mech_ja": "グルダー",
+     "mech_en": "Gruder",
+     "pilot_ja": "ゲル",
+     "hp_hard": "18850"
+    }
+   ]
+  },
+  {
+   "stage": "第7話",
+   "title": "反逆の翼",
+   "atwiki_page": 126,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/126.html",
+   "bosses": [
+    {
+     "mech_ja": "百式",
+     "mech_en": "Hyaku Shiki",
+     "pilot_ja": "クワトロ",
+     "hp_hard": "16750"
+    },
+    {
+     "mech_ja": "トールギス",
+     "mech_en": "Tallgeese",
+     "pilot_ja": "ゼクス",
+     "hp_hard": "17750"
+    }
+   ]
+  },
+  {
+   "stage": "第7話",
+   "title": "暗転",
+   "atwiki_page": 80,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/80.html",
+   "bosses": [
+    {
+     "mech_ja": "ストライクドッグ",
+     "mech_en": "Strike Dog",
+     "pilot_ja": "イプシロン",
+     "hp_hard": "13250"
+    },
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "18750"
+    }
+   ]
+  },
+  {
+   "stage": "第8話",
+   "title": "嵐の予兆",
+   "atwiki_page": 107,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/107.html",
+   "bosses": [
+    {
+     "mech_ja": "飛行要塞グール",
+     "mech_en": "Flying Fortress Ghoul",
+     "pilot_ja": "ブロッケン",
+     "hp_hard": "25050"
+    }
+   ]
+  },
+  {
+   "stage": "第8話",
+   "title": "ツインドライヴ",
+   "atwiki_page": 82,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/82.html",
+   "bosses": [
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "26750"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "ルイス",
+     "hp_hard": "6750"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "6750"
+    }
+   ]
+  },
+  {
+   "stage": "第9話",
+   "title": "ぼくらはみんな生きている",
+   "atwiki_page": 108,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/108.html",
+   "bosses": [
+    {
+     "mech_ja": "ウィール",
+     "mech_en": "Wheel",
+     "pilot_ja": "ヘテロダイン",
+     "hp_hard": "26050"
+    },
+    {
+     "mech_ja": "ダイダロス",
+     "mech_en": "Daedalus",
+     "pilot_ja": "バレン",
+     "hp_hard": "29050"
+    }
+   ]
+  },
+  {
+   "stage": "第9話",
+   "title": "魔神が目覚める日",
+   "atwiki_page": 83,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/83.html",
+   "bosses": [
+    {
+     "mech_ja": "ヴィンセント・エア",
+     "mech_en": "Vincent Air",
+     "pilot_ja": "ギルフォード",
+     "hp_hard": "14350"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "コーラサワー",
+     "hp_hard": "15550"
+    }
+   ]
+  },
+  {
+   "stage": "第10話",
+   "title": "平穏との別離",
+   "atwiki_page": 120,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/120.html",
+   "bosses": [
+    {
+     "mech_ja": "ブランチロボ1号",
+     "mech_en": "Branch Robot No.1",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "16000"
+    }
+   ]
+  },
+  {
+   "stage": "第10話",
+   "title": "もう一人のロックオン",
+   "atwiki_page": 84,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/84.html",
+   "bosses": [
+    {
+     "mech_ja": "百式",
+     "mech_en": "Hyaku Shiki",
+     "pilot_ja": "クワトロ",
+     "hp_hard": "16750"
+    },
+    {
+     "mech_ja": "トールギス",
+     "mech_en": "Tallgeese",
+     "pilot_ja": "ゼクス",
+     "hp_hard": "17750"
+    }
+   ]
+  },
+  {
+   "stage": "第11話",
+   "title": "扉の向こうから",
+   "atwiki_page": 114,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/114.html",
+   "bosses": []
+  },
+  {
+   "stage": "第11話",
+   "title": "アレルヤ奪還作戦",
+   "atwiki_page": 87,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/87.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "8250"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "ルイス",
+     "hp_hard": "6750"
+    },
+    {
+     "mech_ja": "ストライクドッグ",
+     "mech_en": "Strike Dog",
+     "pilot_ja": "イプシロン",
+     "hp_hard": "23250"
+    },
+    {
+     "mech_ja": "アヘッド(スマルトロン)",
+     "mech_en": "Ahead Smultron",
+     "pilot_ja": "ピーリス",
+     "hp_hard": "18250"
+    },
+    {
+     "mech_ja": "ギアナ級陸上母艦",
+     "mech_en": "Guiana-class Land Carrier",
+     "pilot_ja": "カティ",
+     "hp_hard": "17550"
+    }
+   ]
+  },
+  {
+   "stage": "第12話",
+   "title": "悪意と嘘を越えて",
+   "atwiki_page": 115,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/115.html",
+   "bosses": []
+  },
+  {
+   "stage": "第12話",
+   "title": "百万のキセキ",
+   "atwiki_page": 95,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/95.html",
+   "bosses": [
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "18250"
+    },
+    {
+     "mech_ja": "モルドレッド",
+     "mech_en": "Mordred",
+     "pilot_ja": "アーニャ",
+     "hp_hard": "20250"
+    },
+    {
+     "mech_ja": "ヴィンセント・エア",
+     "mech_en": "Vincent Air",
+     "pilot_ja": "ギルフォード",
+     "hp_hard": "14350"
+    },
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "26750"
+    }
+   ]
+  },
+  {
+   "stage": "第13話",
+   "title": "時空震動、再び",
+   "atwiki_page": 119,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/119.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "56500"
+    },
+    {
+     "mech_ja": "サフィアーダ",
+     "mech_en": "Safiada",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "36900"
+    }
+   ]
+  },
+  {
+   "stage": "第13話",
+   "title": "戦雲の扉",
+   "atwiki_page": 100,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/100.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "56500"
+    },
+    {
+     "mech_ja": "サフィアーダ",
+     "mech_en": "Safiada",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "36900"
+    }
+   ]
+  },
+  {
+   "stage": "第14話",
+   "title": "動き出す世界",
+   "atwiki_page": 124,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/124.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "アヘッド(スマルトロン)",
+     "mech_en": "Ahead Smultron",
+     "pilot_ja": "ピーリス",
+     "hp_hard": "18250"
+    },
+    {
+     "mech_ja": "ギアナ級母艦",
+     "mech_en": "Guiana-class Carrier",
+     "pilot_ja": "リント",
+     "hp_hard": "17500"
+    },
+    {
+     "mech_ja": "GN-XIII",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "8250"
+    },
+    {
+     "mech_ja": "GN-XIII",
+     "mech_en": "GN-X III",
+     "pilot_ja": "ルイス",
+     "hp_hard": "7250"
+    },
+    {
+     "mech_ja": "アヘッド(サキガケ)",
+     "mech_en": "Ahead Sakigake",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "20250"
+    }
+   ]
+  },
+  {
+   "stage": "第14話",
+   "title": "与えられた力",
+   "atwiki_page": 104,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/104.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド(サキガケ)",
+     "mech_en": "Ahead Sakigake",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "20250"
+    },
+    {
+     "mech_ja": "ギアナ級陸上母艦",
+     "mech_en": "Guiana-class Land Carrier",
+     "pilot_ja": "リント",
+     "hp_hard": "17500"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "アヘッド(スマルトロン)",
+     "mech_en": "Ahead Smultron",
+     "pilot_ja": "ピーリス",
+     "hp_hard": "18250"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "8250"
+    },
+    {
+     "mech_ja": "GN-X III",
+     "mech_en": "GN-X III",
+     "pilot_ja": "ルイス",
+     "hp_hard": "7250"
+    }
+   ]
+  },
+  {
+   "stage": "第15話",
+   "title": "マン・アズ・ビフォー",
+   "atwiki_page": 110,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/110.html",
+   "bosses": [
+    {
+     "mech_ja": "アクシオ・バーグラー",
+     "mech_en": "Axio Burglar",
+     "pilot_ja": "マリリン",
+     "hp_hard": "18900"
+    },
+    {
+     "mech_ja": "ディム・リー",
+     "mech_en": "Dim Lee",
+     "pilot_ja": "ジェラウド",
+     "hp_hard": "32900"
+    }
+   ]
+  },
+  {
+   "stage": "第16話",
+   "title": "次元の心央",
+   "atwiki_page": 125,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/125.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "56500"
+    },
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "51500"
+    },
+    {
+     "mech_ja": "パールネイル",
+     "mech_en": "Pearl Nail",
+     "pilot_ja": "マルグリット",
+     "hp_hard": "35900"
+    }
+   ]
+  },
+  {
+   "stage": "第17話",
+   "title": "朱禁城の花嫁",
+   "atwiki_page": 99,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/99.html",
+   "bosses": [
+    {
+     "mech_ja": "神虎",
+     "mech_en": "Shen Hu",
+     "pilot_ja": "星刻",
+     "hp_hard": "28750"
+    },
+    {
+     "mech_ja": "シェンロンガンダム",
+     "mech_en": "Shenlong Gundam",
+     "pilot_ja": "五飛",
+     "hp_hard": "6050"
+    },
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "18250"
+    },
+    {
+     "mech_ja": "モルドレッド",
+     "mech_en": "Mordred",
+     "pilot_ja": "アーニャ",
+     "hp_hard": "20250"
+    },
+    {
+     "mech_ja": "大竜胆",
+     "mech_en": "Da Longdan",
+     "pilot_ja": "趙皓",
+     "hp_hard": "34000"
+    }
+   ]
+  },
+  {
+   "stage": "第18話",
+   "title": "アッシュフォード・ラプソディ",
+   "atwiki_page": 140,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/140.html",
+   "bosses": []
+  },
+  {
+   "stage": "第19話",
+   "title": "それぞれの戦場",
+   "atwiki_page": 130,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/130.html",
+   "bosses": [
+    {
+     "mech_ja": "トールギス",
+     "mech_en": "Tallgeese",
+     "pilot_ja": "ゼクス",
+     "hp_hard": "25750"
+    },
+    {
+     "mech_ja": "アヘッド(サキガケ)",
+     "mech_en": "Ahead Sakigake",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "20250"
+    },
+    {
+     "mech_ja": "GN-XIII",
+     "mech_en": "GN-X III",
+     "pilot_ja": "コーラサワー",
+     "hp_hard": "8250"
+    },
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイヴ",
+     "hp_hard": "26750"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "25750"
+    },
+    {
+     "mech_ja": "アルケーガンダム",
+     "mech_en": "Arche Gundam",
+     "pilot_ja": "サーシェス",
+     "hp_hard": "24750"
+    }
+   ]
+  },
+  {
+   "stage": "第20話",
+   "title": "白と黒と",
+   "atwiki_page": 154,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/154.html",
+   "bosses": [
+    {
+     "mech_ja": "ブラッカリィ",
+     "mech_en": "Blackery",
+     "pilot_ja": "ティンプ",
+     "hp_hard": "19900"
+    },
+    {
+     "mech_ja": "ベック・ザ・グレートRX3",
+     "mech_en": "Beck the Great RX3",
+     "pilot_ja": "ベック",
+     "hp_hard": "23050"
+    },
+    {
+     "mech_ja": "ダイビングビートル",
+     "mech_en": "Diving Beetle",
+     "pilot_ja": "カン・ユー",
+     "hp_hard": "9250"
+    },
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "35900"
+    }
+   ]
+  },
+  {
+   "stage": "第21話",
+   "title": "時の流れに",
+   "atwiki_page": 157,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/157.html",
+   "bosses": [
+    {
+     "mech_ja": "エンキドゥドゥ",
+     "mech_en": "Enkidudu",
+     "pilot_ja": "ヴィラル",
+     "hp_hard": "20450"
+    }
+   ]
+  },
+  {
+   "stage": "第21話",
+   "title": "伝説の歌声",
+   "atwiki_page": 176,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/176.html",
+   "bosses": [
+    {
+     "mech_ja": "バッフル",
+     "mech_en": "Baffle",
+     "pilot_ja": "ゲシュタルト",
+     "hp_hard": "33050"
+    }
+   ]
+  },
+  {
+   "stage": "第22話",
+   "title": "出撃！！ 新たなる戦士たち！",
+   "atwiki_page": 158,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/158.html",
+   "bosses": []
+  },
+  {
+   "stage": "第22話",
+   "title": "ランカ・アタック",
+   "atwiki_page": 179,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/179.html",
+   "bosses": []
+  },
+  {
+   "stage": "第23話",
+   "title": "あなたは何もわかっていない",
+   "atwiki_page": 170,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/170.html",
+   "bosses": []
+  },
+  {
+   "stage": "第23話",
+   "title": "悲しみのカトル",
+   "atwiki_page": 186,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/186.html",
+   "bosses": [
+    {
+     "mech_ja": "ウイングガンダムゼロ",
+     "mech_en": "Wing Gundam Zero",
+     "pilot_ja": "カトル",
+     "hp_hard": "16750"
+    },
+    {
+     "mech_ja": "ヴァイエイト",
+     "mech_en": "Vayeate",
+     "pilot_ja": "トロワ",
+     "hp_hard": "24750"
+    },
+    {
+     "mech_ja": "メリクリウス",
+     "mech_en": "Mercurius",
+     "pilot_ja": "ヒイロ",
+     "hp_hard": "26750"
+    }
+   ]
+  },
+  {
+   "stage": "第24話",
+   "title": "あなたはもう必要ないのです",
+   "atwiki_page": 181,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/181.html",
+   "bosses": [
+    {
+     "mech_ja": "エンキドゥドゥ",
+     "mech_en": "Enkidudu",
+     "pilot_ja": "ヴィラル",
+     "hp_hard": "20450"
+    },
+    {
+     "mech_ja": "ブラッカリィ",
+     "mech_en": "Blackery",
+     "pilot_ja": "ティンプ",
+     "hp_hard": "19900"
+    },
+    {
+     "mech_ja": "ベック・ザ・グレートRX3",
+     "mech_en": "Beck the Great RX3",
+     "pilot_ja": "ベック",
+     "hp_hard": "23550"
+    },
+    {
+     "mech_ja": "ダイビングビートル",
+     "mech_en": "Diving Beetle",
+     "pilot_ja": "カン・ユー",
+     "hp_hard": "9250"
+    },
+    {
+     "mech_ja": "巨大ゴール＆ブライ",
+     "mech_en": "Giant Gorl & Brai",
+     "pilot_ja": "ゴール＆ブライ",
+     "hp_hard": "15400"
+    }
+   ]
+  },
+  {
+   "stage": "第24話",
+   "title": "ゼロと呼ばれたG",
+   "atwiki_page": 187,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/187.html",
+   "bosses": [
+    {
+     "mech_ja": "ウイングガンダムゼロ",
+     "mech_en": "Wing Gundam Zero",
+     "pilot_ja": "デュオ",
+     "hp_hard": "16750"
+    },
+    {
+     "mech_ja": "アヘッド（サキガケ）",
+     "mech_en": "Ahead Sakigake",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "20250"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "25750"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ブリング",
+     "hp_hard": "25750"
+    }
+   ]
+  },
+  {
+   "stage": "第25話",
+   "title": "終わらない約束",
+   "atwiki_page": 182,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/182.html",
+   "bosses": [
+    {
+     "mech_ja": "パールネイル",
+     "mech_en": "Pearl Nail",
+     "pilot_ja": "マルグリット",
+     "hp_hard": "35900"
+    },
+    {
+     "mech_ja": "ディアムド",
+     "mech_en": "Diamud",
+     "pilot_ja": "ジェラウド",
+     "hp_hard": "55900"
+    }
+   ]
+  },
+  {
+   "stage": "第26話",
+   "title": "冥府への転落",
+   "atwiki_page": 184,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/184.html",
+   "bosses": [
+    {
+     "mech_ja": "アブドラU6",
+     "mech_en": "Abdora U6",
+     "pilot_ja": "ケドラ",
+     "hp_hard": "37050"
+    },
+    {
+     "mech_ja": "グロイザーX10",
+     "mech_en": "Groizer X10",
+     "pilot_ja": "ケドラ",
+     "hp_hard": "6650"
+    },
+    {
+     "mech_ja": "タロス像",
+     "mech_en": "Talos Statue",
+     "pilot_ja": "ケドラ",
+     "hp_hard": "5650"
+    },
+    {
+     "mech_ja": "サフィアーダ",
+     "mech_en": "Safiada",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "36900"
+    }
+   ]
+  },
+  {
+   "stage": "第27話",
+   "title": "ゼロVSゼロ",
+   "atwiki_page": 185,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/185.html",
+   "bosses": [
+    {
+     "mech_ja": "ウイングガンダムゼロ",
+     "mech_en": "Wing Gundam Zero",
+     "pilot_ja": "ヒイロ",
+     "hp_hard": "32750"
+    },
+    {
+     "mech_ja": "アルトロンガンダム",
+     "mech_en": "Altron Gundam",
+     "pilot_ja": "五飛",
+     "hp_hard": "17450"
+    },
+    {
+     "mech_ja": "エンプラス",
+     "mech_en": "Empress",
+     "pilot_ja": "デヴァイン",
+     "hp_hard": "30750"
+    },
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイブ",
+     "hp_hard": "26750"
+    },
+    {
+     "mech_ja": "アルケーガンダム",
+     "mech_en": "Arche Gundam",
+     "pilot_ja": "サーシェス",
+     "hp_hard": "24750"
+    }
+   ]
+  },
+  {
+   "stage": "第28話",
+   "title": "暗黒よりの使者",
+   "atwiki_page": 188,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/188.html",
+   "bosses": [
+    {
+     "mech_ja": "ブラックオックス",
+     "mech_en": "Black Ox",
+     "pilot_ja": "ブラックオックス",
+     "hp_hard": "29050"
+    },
+    {
+     "mech_ja": "ブランチロボ1号",
+     "mech_en": "Branch Robot No.1",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "17050"
+    },
+    {
+     "mech_ja": "ブリザーム",
+     "mech_en": "Blizzam",
+     "pilot_ja": "ゲシュタルト",
+     "hp_hard": "37050"
+    }
+   ]
+  },
+  {
+   "stage": "第29話",
+   "title": "戦士達の叫び",
+   "atwiki_page": 190,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/190.html",
+   "bosses": [
+    {
+     "mech_ja": "マスラオ",
+     "mech_en": "Masurao",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "30750"
+    },
+    {
+     "mech_ja": "ストライクドッグ",
+     "mech_en": "Strike Dog",
+     "pilot_ja": "イプシロン",
+     "hp_hard": "23250"
+    },
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "26750"
+    },
+    {
+     "mech_ja": "ギアナ級陸上母艦",
+     "mech_en": "Guiana-class Land Carrier",
+     "pilot_ja": "リント",
+     "hp_hard": "18550"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "ジニン",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "アヘッド(スマルトロン)",
+     "mech_en": "Ahead Smultron",
+     "pilot_ja": "ルイス",
+     "hp_hard": "19250"
+    },
+    {
+     "mech_ja": "GN-XIII",
+     "mech_en": "GN-X III",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "6750"
+    },
+    {
+     "mech_ja": "GN-XIII",
+     "mech_en": "GN-X III",
+     "pilot_ja": "コーラサワー",
+     "hp_hard": "6750"
+    }
+   ]
+  },
+  {
+   "stage": "第30話",
+   "title": "一点突破",
+   "atwiki_page": 199,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/199.html",
+   "bosses": [
+    {
+     "mech_ja": "サフィアーダ",
+     "mech_en": "Safiada",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "42900"
+    },
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "51500"
+    },
+    {
+     "mech_ja": "パールネイル",
+     "mech_en": "Pearl Nail",
+     "pilot_ja": "マルグリット",
+     "hp_hard": "38900"
+    },
+    {
+     "mech_ja": "次元獣ダモン",
+     "mech_en": "Dimension Beast Damon",
+     "pilot_ja": "次元獣エスター",
+     "hp_hard": "9050"
+    }
+   ]
+  },
+  {
+   "stage": "第31話",
+   "title": "ジ・アンブレイカブル",
+   "atwiki_page": 200,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/200.html",
+   "bosses": [
+    {
+     "mech_ja": "ディアムド",
+     "mech_en": "Diamud",
+     "pilot_ja": "ジェラウド",
+     "hp_hard": "55900"
+    }
+   ]
+  },
+  {
+   "stage": "第32話",
+   "title": "奪われた鉄人",
+   "atwiki_page": 202,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/202.html",
+   "bosses": [
+    {
+     "mech_ja": "鉄人28号",
+     "mech_en": "Tetsujin 28",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "19050"
+    },
+    {
+     "mech_ja": "ブランチロボ5号",
+     "mech_en": "Branch Robot No.5",
+     "pilot_ja": "ブランチ",
+     "hp_hard": "36050"
+    },
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "35900"
+    }
+   ]
+  },
+  {
+   "stage": "第32話",
+   "title": "メメントモリ攻略戦",
+   "atwiki_page": 212,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/212.html",
+   "bosses": [
+    {
+     "mech_ja": "バイカル級巡洋艦",
+     "mech_en": "Baikal-class Cruiser",
+     "pilot_ja": "リント",
+     "hp_hard": "29500"
+    },
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイヴ",
+     "hp_hard": "26750"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "25750"
+    },
+    {
+     "mech_ja": "エンプラス",
+     "mech_en": "Empress",
+     "pilot_ja": "デヴァイン",
+     "hp_hard": "31250"
+    }
+   ]
+  },
+  {
+   "stage": "第33話",
+   "title": "ブラック・アヴェンジャー",
+   "atwiki_page": 204,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/204.html",
+   "bosses": []
+  },
+  {
+   "stage": "第33話",
+   "title": "散りゆく光の中で",
+   "atwiki_page": 207,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/207.html",
+   "bosses": [
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "35900"
+    }
+   ]
+  },
+  {
+   "stage": "第34話",
+   "title": "亡者再臨",
+   "atwiki_page": 206,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/206.html",
+   "bosses": []
+  },
+  {
+   "stage": "第34話",
+   "title": "白き牙",
+   "atwiki_page": 209,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/209.html",
+   "bosses": [
+    {
+     "mech_ja": "百式",
+     "mech_en": "Hyaku Shiki",
+     "pilot_ja": "クワトロ",
+     "hp_hard": "33750"
+    },
+    {
+     "mech_ja": "ガンダムエピオン",
+     "mech_en": "Gundam Epyon",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "34750"
+    },
+    {
+     "mech_ja": "アルケーガンダム",
+     "mech_en": "Arche Gundam",
+     "pilot_ja": "サーシェス",
+     "hp_hard": "28750"
+    },
+    {
+     "mech_ja": "ガッデス",
+     "mech_en": "Gadesse",
+     "pilot_ja": "アニュー",
+     "hp_hard": "29750"
+    },
+    {
+     "mech_ja": "マスラオ",
+     "mech_en": "Masurao",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "30750"
+    }
+   ]
+  },
+  {
+   "stage": "第35話",
+   "title": "昨日への決別",
+   "atwiki_page": 210,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/210.html",
+   "bosses": [
+    {
+     "mech_ja": "ディアムド",
+     "mech_en": "Diamud",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "55900"
+    }
+   ]
+  },
+  {
+   "stage": "第35話",
+   "title": "明日へのあがき",
+   "atwiki_page": 218,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/218.html",
+   "bosses": [
+    {
+     "mech_ja": "ディアムド",
+     "mech_en": "Diamud",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "55900"
+    }
+   ]
+  },
+  {
+   "stage": "第36話",
+   "title": "加速する世界",
+   "atwiki_page": 213,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/213.html",
+   "bosses": [
+    {
+     "mech_ja": "アリエティス",
+     "mech_en": "Arietis",
+     "pilot_ja": "アイム",
+     "hp_hard": "38900"
+    }
+   ]
+  },
+  {
+   "stage": "第37話",
+   "title": "銀河をステージに",
+   "atwiki_page": 232,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/232.html",
+   "bosses": []
+  },
+  {
+   "stage": "第38話",
+   "title": "告げられる絶望",
+   "atwiki_page": 233,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/233.html",
+   "bosses": [
+    {
+     "mech_ja": "ブラッカリィ",
+     "mech_en": "Blackery",
+     "pilot_ja": "ティンプ",
+     "hp_hard": "28900"
+    },
+    {
+     "mech_ja": "ブラッドサッカー",
+     "mech_en": "Bloodsucker",
+     "pilot_ja": "カン・ユー",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "ベック・ザ・グレートRX3",
+     "mech_en": "Beck the Great RX3",
+     "pilot_ja": "ベック",
+     "hp_hard": "34050"
+    },
+    {
+     "mech_ja": "エンキドゥドゥ",
+     "mech_en": "Enkidudu",
+     "pilot_ja": "ヴィラル",
+     "hp_hard": "35850"
+    }
+   ]
+  },
+  {
+   "stage": "第38話",
+   "title": "過去からの刺客",
+   "atwiki_page": 240,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/240.html",
+   "bosses": [
+    {
+     "mech_ja": "パーシヴァル",
+     "mech_en": "Percival",
+     "pilot_ja": "ルキアーノ",
+     "hp_hard": "23250"
+    }
+   ]
+  },
+  {
+   "stage": "第39話",
+   "title": "禁断の継承者",
+   "atwiki_page": 235,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/235.html",
+   "bosses": [
+    {
+     "mech_ja": "ストライクドッグ",
+     "mech_en": "Strike Dog",
+     "pilot_ja": "イプシロン",
+     "hp_hard": "33250"
+    },
+    {
+     "mech_ja": "ジークフリート",
+     "mech_en": "Siegfried",
+     "pilot_ja": "V.V.",
+     "hp_hard": "36150"
+    }
+   ]
+  },
+  {
+   "stage": "第40話",
+   "title": "歌え、誰かのために",
+   "atwiki_page": 234,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/234.html",
+   "bosses": []
+  },
+  {
+   "stage": "第41話",
+   "title": "遺恨！ くろがね屋の一番長い日！",
+   "atwiki_page": 236,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/236.html",
+   "bosses": [
+    {
+     "mech_ja": "エネルガーZ",
+     "mech_en": "Energer Z",
+     "pilot_ja": "剣造",
+     "hp_hard": "45000(46050)"
+    }
+   ]
+  },
+  {
+   "stage": "第41話",
+   "title": "トライアングラー",
+   "atwiki_page": 238,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/238.html",
+   "bosses": []
+  },
+  {
+   "stage": "第42話",
+   "title": "父ちゃんから受け継いだもの",
+   "atwiki_page": 279,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/279.html",
+   "bosses": [
+    {
+     "mech_ja": "飛行要塞グール",
+     "mech_en": "Flying Fortress Ghoul",
+     "pilot_ja": "ブロッケン",
+     "hp_hard": "34050"
+    },
+    {
+     "mech_ja": "ゼッドファイナー",
+     "mech_en": "Zed Finer",
+     "pilot_ja": "ゲシュタルト",
+     "hp_hard": "41050"
+    }
+   ]
+  },
+  {
+   "stage": "第42話",
+   "title": "異能者",
+   "atwiki_page": 239,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/239.html",
+   "bosses": [
+    {
+     "mech_ja": "スサノオ",
+     "mech_en": "Susanowo",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "36750"
+    },
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイヴ",
+     "hp_hard": "29750"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "28750"
+    },
+    {
+     "mech_ja": "アヘッド（スマルトロン）",
+     "mech_en": "Ahead Smultron",
+     "pilot_ja": "ルイス",
+     "hp_hard": "19250"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "18750"
+    },
+    {
+     "mech_ja": "ガンダムエピオン",
+     "mech_en": "Gundam Epyon",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "34750"
+    }
+   ]
+  },
+  {
+   "stage": "第43話",
+   "title": "闇を断つ牙",
+   "atwiki_page": 283,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/283.html",
+   "bosses": [
+    {
+     "mech_ja": "オリジナルダンクーガ",
+     "mech_en": "Original Dancouga",
+     "pilot_ja": "ムーンWILL",
+     "hp_hard": "48400"
+    }
+   ]
+  },
+  {
+   "stage": "第43話",
+   "title": "修羅",
+   "atwiki_page": 243,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/243.html",
+   "bosses": [
+    {
+     "mech_ja": "ラビドリードッグ",
+     "mech_en": "Rabidly Dog",
+     "pilot_ja": "キリコ",
+     "hp_hard": "54250"
+    }
+   ]
+  },
+  {
+   "stage": "第44話",
+   "title": "降臨！！ 終末を呼ぶ邪神！",
+   "atwiki_page": 241,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/241.html",
+   "bosses": [
+    {
+     "mech_ja": "巨大ゴール＆ブライ",
+     "mech_en": "Giant Gorl & Brai",
+     "pilot_ja": "ゴール＆ブライ",
+     "hp_hard": "16200"
+    },
+    {
+     "mech_ja": "メタルビースト・ドラゴン",
+     "mech_en": "Metal Beast Dragon",
+     "pilot_ja": "早乙女",
+     "hp_hard": "66400"
+    }
+   ]
+  },
+  {
+   "stage": "第45話",
+   "title": "次元力",
+   "atwiki_page": 242,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/242.html",
+   "bosses": [
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "46200"
+    },
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "77000"
+    },
+    {
+     "mech_ja": "次元獣ダモン",
+     "mech_en": "Dimension Beast Damon",
+     "pilot_ja": "次元獣エスター",
+     "hp_hard": "9400"
+    }
+   ]
+  },
+  {
+   "stage": "第46話",
+   "title": "失われし聖王国",
+   "atwiki_page": 248,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/248.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "57000"
+    },
+    {
+     "mech_ja": "ディアムド",
+     "mech_en": "Diamud",
+     "pilot_ja": "ウェイン",
+     "hp_hard": "86200"
+    }
+   ]
+  },
+  {
+   "stage": "第47話",
+   "title": "死線！ 総攻撃Dr.ヘル！",
+   "atwiki_page": 252,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/252.html",
+   "bosses": [
+    {
+     "mech_ja": "機械獣あしゅら男爵",
+     "mech_en": "Baron Ashura (Mechanical Beast)",
+     "pilot_ja": "あしゅら",
+     "hp_hard": "56400"
+    },
+    {
+     "mech_ja": "ブロッケンV2シュナイダー",
+     "mech_en": "Brocken V2 Schneider",
+     "pilot_ja": "ブロッケン",
+     "hp_hard": "53400"
+    },
+    {
+     "mech_ja": "ピグマン子爵",
+     "mech_en": "Viscount Pygman",
+     "pilot_ja": "ピグマン",
+     "hp_hard": "33400"
+    },
+    {
+     "mech_ja": "地獄王ゴードン",
+     "mech_en": "Hell King Gordon",
+     "pilot_ja": "Dr.ヘル",
+     "hp_hard": "90400"
+    }
+   ]
+  },
+  {
+   "stage": "第48話",
+   "title": "ゴッドブレス・ユニバース",
+   "atwiki_page": 253,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/253.html",
+   "bosses": [
+    {
+     "mech_ja": "ムゲ帝王",
+     "mech_en": "Emperor Muge",
+     "pilot_ja": "ムゲ",
+     "hp_hard": "89400"
+    }
+   ]
+  },
+  {
+   "stage": "第49話",
+   "title": "ゼロとルルーシュ",
+   "atwiki_page": 256,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/256.html",
+   "bosses": [
+    {
+     "mech_ja": "ギャラハッド",
+     "mech_en": "Galahad",
+     "pilot_ja": "ビスマルク",
+     "hp_hard": "30000"
+    },
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "26000"
+    },
+    {
+     "mech_ja": "モルドレッド",
+     "mech_en": "Mordred",
+     "pilot_ja": "アーニャ",
+     "hp_hard": "29000"
+    },
+    {
+     "mech_ja": "パーシヴァル",
+     "mech_en": "Percival",
+     "pilot_ja": "ルキアーノ",
+     "hp_hard": "27500"
+    },
+    {
+     "mech_ja": "アヴァロン",
+     "mech_en": "Avalon",
+     "pilot_ja": "シュナイゼル",
+     "hp_hard": "40000"
+    },
+    {
+     "mech_ja": "ランスロット・コンクエスター",
+     "mech_en": "Lancelot Conquista",
+     "pilot_ja": "スザク",
+     "hp_hard": "27000"
+    }
+   ]
+  },
+  {
+   "stage": "第50話",
+   "title": "皇帝失格",
+   "atwiki_page": 257,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/257.html",
+   "bosses": [
+    {
+     "mech_ja": "ログレス級",
+     "mech_en": "Logres-class",
+     "pilot_ja": "シャルル",
+     "hp_hard": "90000"
+    },
+    {
+     "mech_ja": "ギャラハッド",
+     "mech_en": "Galahad",
+     "pilot_ja": "ビスマルク",
+     "hp_hard": "36000"
+    }
+   ]
+  },
+  {
+   "stage": "第50話",
+   "title": "超合集国決議第壱号",
+   "atwiki_page": 259,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/259.html",
+   "bosses": [
+    {
+     "mech_ja": "ログレス級",
+     "mech_en": "Logres-class",
+     "pilot_ja": "シャルル",
+     "hp_hard": "90000"
+    },
+    {
+     "mech_ja": "ギャラハッド",
+     "mech_en": "Galahad",
+     "pilot_ja": "ビスマルク",
+     "hp_hard": "30000"
+    },
+    {
+     "mech_ja": "ランスロット・アルビオン",
+     "mech_en": "Lancelot Albion",
+     "pilot_ja": "スザク",
+     "hp_hard": "49800"
+    },
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "26000"
+    }
+   ]
+  },
+  {
+   "stage": "第51話",
+   "title": "シュナイゼルの仮面",
+   "atwiki_page": 270,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/270.html",
+   "bosses": [
+    {
+     "mech_ja": "アヴァロン",
+     "mech_en": "Avalon",
+     "pilot_ja": "ルルーシュ",
+     "hp_hard": "50000"
+    },
+    {
+     "mech_ja": "サザーランド・ジーク",
+     "mech_en": "Sutherland Sieg",
+     "pilot_ja": "ジェレミア",
+     "hp_hard": "37200"
+    },
+    {
+     "mech_ja": "ランスロット・アルビオン",
+     "mech_en": "Lancelot Albion",
+     "pilot_ja": "スザク",
+     "hp_hard": "39800"
+    },
+    {
+     "mech_ja": "ダモクレス要塞",
+     "mech_en": "Damocles",
+     "pilot_ja": "シュナイゼル",
+     "hp_hard": "122000"
+    },
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "26000"
+    },
+    {
+     "mech_ja": "モルドレッド",
+     "mech_en": "Mordred",
+     "pilot_ja": "アーニャ",
+     "hp_hard": "29000"
+    }
+   ]
+  },
+  {
+   "stage": "第51話",
+   "title": "戦乱の王ピースクラフト",
+   "atwiki_page": 260,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/260.html",
+   "bosses": [
+    {
+     "mech_ja": "ギアナ級陸上母艦",
+     "mech_en": "Guiana-class Land Carrier",
+     "pilot_ja": "グッドマン",
+     "hp_hard": "28000"
+    },
+    {
+     "mech_ja": "スサノオ",
+     "mech_en": "Susanowo",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "37000"
+    },
+    {
+     "mech_ja": "レグナント",
+     "mech_en": "Regnant",
+     "pilot_ja": "ルイス",
+     "hp_hard": "47000"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "19000"
+    },
+    {
+     "mech_ja": "アリエティス",
+     "mech_en": "Arietis",
+     "pilot_ja": "アイム",
+     "hp_hard": "62300(97200)"
+    }
+   ]
+  },
+  {
+   "stage": "第52話",
+   "title": "混迷の戦場",
+   "atwiki_page": 276,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/276.html",
+   "bosses": [
+    {
+     "mech_ja": "スサノオ",
+     "mech_en": "Susanowo",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "37000"
+    },
+    {
+     "mech_ja": "レグナント",
+     "mech_en": "Regnant",
+     "pilot_ja": "ルイス",
+     "hp_hard": "47000"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "19000"
+    },
+    {
+     "mech_ja": "トールギスII",
+     "mech_en": "Tallgeese II",
+     "pilot_ja": "トレーズ",
+     "hp_hard": "45000"
+    },
+    {
+     "mech_ja": "ガンダムエピオン",
+     "mech_en": "Gundam Epyon",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "35000"
+    }
+   ]
+  },
+  {
+   "stage": "第52話",
+   "title": "決死のエンドゲーム",
+   "atwiki_page": 266,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/266.html",
+   "bosses": [
+    {
+     "mech_ja": "ギャラハッド",
+     "mech_en": "Galahad",
+     "pilot_ja": "ビスマルク",
+     "hp_hard": "36000"
+    },
+    {
+     "mech_ja": "トリスタン",
+     "mech_en": "Tristan",
+     "pilot_ja": "ジノ",
+     "hp_hard": "26000"
+    },
+    {
+     "mech_ja": "モルドレッド",
+     "mech_en": "Mordred",
+     "pilot_ja": "アーニャ",
+     "hp_hard": "29000"
+    },
+    {
+     "mech_ja": "ダモクレス要塞",
+     "mech_en": "Damocles",
+     "pilot_ja": "シュナイゼル",
+     "hp_hard": "122000"
+    },
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "46200"
+    }
+   ]
+  },
+  {
+   "stage": "第53話",
+   "title": "堕ちてくる月",
+   "atwiki_page": 289,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/289.html",
+   "bosses": []
+  },
+  {
+   "stage": "第53話",
+   "title": "最後の勝利者",
+   "atwiki_page": 269,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/269.html",
+   "bosses": [
+    {
+     "mech_ja": "リーブラ",
+     "mech_en": "Libra",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "98200"
+    },
+    {
+     "mech_ja": "バイカル級宇宙巡洋艦",
+     "mech_en": "Baikal-class Space Cruiser",
+     "pilot_ja": "グッドマン",
+     "hp_hard": "30000"
+    },
+    {
+     "mech_ja": "ガンダムエピオン",
+     "mech_en": "Gundam Epyon",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "57000"
+    },
+    {
+     "mech_ja": "トールギスII",
+     "mech_en": "Tallgeese II",
+     "pilot_ja": "トレーズ",
+     "hp_hard": "54000"
+    },
+    {
+     "mech_ja": "スサノオ",
+     "mech_en": "Susanowo",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "53500"
+    }
+   ]
+  },
+  {
+   "stage": "第54話",
+   "title": "絶望の世界",
+   "atwiki_page": 268,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/268.html",
+   "bosses": [
+    {
+     "mech_ja": "皇帝ズール",
+     "mech_en": "Emperor Zuul",
+     "pilot_ja": "ズール",
+     "hp_hard": "131200"
+    },
+    {
+     "mech_ja": "ムゲ帝王",
+     "mech_en": "Emperor Muge",
+     "pilot_ja": "ムゲ",
+     "hp_hard": "89400"
+    },
+    {
+     "mech_ja": "アンチ・グレンラガン",
+     "mech_en": "Anti-Gurren Lagann",
+     "pilot_ja": "アンチスパイラル",
+     "hp_hard": "56400"
+    }
+   ]
+  },
+  {
+   "stage": "第54話",
+   "title": "決戦！！果てなき進化へ！",
+   "atwiki_page": 272,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/272.html",
+   "bosses": []
+  },
+  {
+   "stage": "第55話",
+   "title": "アナタノオト",
+   "atwiki_page": 271,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/271.html",
+   "bosses": [
+    {
+     "mech_ja": "巨大ランカ",
+     "mech_en": "Giant Ranka",
+     "pilot_ja": "ランカ",
+     "hp_hard": "49200"
+    },
+    {
+     "mech_ja": "VF-27γルシファーF",
+     "mech_en": "VF-27 Gamma Lucifer",
+     "pilot_ja": "ブレラ",
+     "hp_hard": "31000"
+    },
+    {
+     "mech_ja": "バジュラ・クィーン",
+     "mech_en": "Vajra Queen",
+     "pilot_ja": "グレイス",
+     "hp_hard": "189200"
+    }
+   ]
+  },
+  {
+   "stage": "第55話",
+   "title": "復活の暗黒神",
+   "atwiki_page": 273,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/273.html",
+   "bosses": [
+    {
+     "mech_ja": "シュロウガ",
+     "mech_en": "Shrouga",
+     "pilot_ja": "アサキム",
+     "hp_hard": "59200"
+    }
+   ]
+  },
+  {
+   "stage": "第56話",
+   "title": "BEYOND",
+   "atwiki_page": 275,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/275.html",
+   "bosses": [
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "22000"
+    },
+    {
+     "mech_ja": "アルケーガンダム",
+     "mech_en": "Arche Gundam",
+     "pilot_ja": "サーシェス",
+     "hp_hard": "43000"
+    },
+    {
+     "mech_ja": "レグナント",
+     "mech_en": "Regnant",
+     "pilot_ja": "ルイス",
+     "hp_hard": "47000"
+    },
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイヴ",
+     "hp_hard": "44000"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "43000"
+    },
+    {
+     "mech_ja": "リボーンズガンダム",
+     "mech_en": "Reborns Gundam",
+     "pilot_ja": "リボンズ",
+     "hp_hard": "99000"
+    }
+   ]
+  },
+  {
+   "stage": "第56話",
+   "title": "奈落への螺旋",
+   "atwiki_page": 281,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/281.html",
+   "bosses": [
+    {
+     "mech_ja": "インセクト-R",
+     "mech_en": "Insect-R",
+     "pilot_ja": "ヘテロダイン",
+     "hp_hard": "29400"
+    },
+    {
+     "mech_ja": "皇帝ズール",
+     "mech_en": "Emperor Zuul",
+     "pilot_ja": "ズール",
+     "hp_hard": "131200"
+    },
+    {
+     "mech_ja": "ムゲ帝王",
+     "mech_en": "Emperor Muge",
+     "pilot_ja": "ムゲ",
+     "hp_hard": "89400"
+    },
+    {
+     "mech_ja": "アンチ・グレンラガン",
+     "mech_en": "Anti-Gurren Lagann",
+     "pilot_ja": "アンチスパイラル",
+     "hp_hard": "56400"
+    }
+   ]
+  },
+  {
+   "stage": "第57話",
+   "title": "ゼロ・レクイエム",
+   "atwiki_page": 280,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/280.html",
+   "bosses": [
+    {
+     "mech_ja": "ギアナ級陸上母艦",
+     "mech_en": "Guiana-class Land Carrier",
+     "pilot_ja": "グッドマン",
+     "hp_hard": "28000"
+    },
+    {
+     "mech_ja": "アリエティス",
+     "mech_en": "Arietis",
+     "pilot_ja": "アイム",
+     "hp_hard": "97200"
+    },
+    {
+     "mech_ja": "ダモクレス要塞",
+     "mech_en": "Damocles",
+     "pilot_ja": "ルルーシュ",
+     "hp_hard": "142000"
+    },
+    {
+     "mech_ja": "ガンダムエピオン",
+     "mech_en": "Gundam Epyon",
+     "pilot_ja": "ミリアルド",
+     "hp_hard": "57000"
+    },
+    {
+     "mech_ja": "スサノオ",
+     "mech_en": "Susanowo",
+     "pilot_ja": "ブシドー",
+     "hp_hard": "53500"
+    },
+    {
+     "mech_ja": "サザーランド・ジーク",
+     "mech_en": "Sutherland Sieg",
+     "pilot_ja": "ジェレミア",
+     "hp_hard": "37200"
+    },
+    {
+     "mech_ja": "ランスロット・アルビオン",
+     "mech_en": "Lancelot Albion",
+     "pilot_ja": "スザク",
+     "hp_hard": "49800"
+    },
+    {
+     "mech_ja": "ランスロット・フロンティア",
+     "mech_en": "Lancelot Frontier",
+     "pilot_ja": "C.C.",
+     "hp_hard": "29000"
+    }
+   ]
+  },
+  {
+   "stage": "第57話",
+   "title": "ネクスト・フロンティア",
+   "atwiki_page": 286,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/286.html",
+   "bosses": [
+    {
+     "mech_ja": "巨大ランカ",
+     "mech_en": "Giant Ranka",
+     "pilot_ja": "ランカ",
+     "hp_hard": "49200"
+    },
+    {
+     "mech_ja": "VF-27γルシファーF",
+     "mech_en": "VF-27 Gamma Lucifer",
+     "pilot_ja": "ブレラ",
+     "hp_hard": "31000"
+    },
+    {
+     "mech_ja": "レグナント",
+     "mech_en": "Regnant",
+     "pilot_ja": "ルイス",
+     "hp_hard": "47000"
+    },
+    {
+     "mech_ja": "アルケーガンダム",
+     "mech_en": "Arche Gundam",
+     "pilot_ja": "サーシェス",
+     "hp_hard": "43000"
+    },
+    {
+     "mech_ja": "アヘッド",
+     "mech_en": "Ahead",
+     "pilot_ja": "アンドレイ",
+     "hp_hard": "22000"
+    }
+   ]
+  },
+  {
+   "stage": "第58話",
+   "title": "閃光！！ 進化の果て！",
+   "atwiki_page": 282,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/282.html",
+   "bosses": [
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "27000"
+    }
+   ]
+  },
+  {
+   "stage": "第58話",
+   "title": "革新",
+   "atwiki_page": 287,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/287.html",
+   "bosses": [
+    {
+     "mech_ja": "ガデッサ",
+     "mech_en": "Gadessa",
+     "pilot_ja": "リヴァイヴ",
+     "hp_hard": "44000"
+    },
+    {
+     "mech_ja": "ガラッゾ",
+     "mech_en": "Garazzo",
+     "pilot_ja": "ヒリング",
+     "hp_hard": "43000"
+    },
+    {
+     "mech_ja": "リボーンズガンダム",
+     "mech_en": "Reborns Gundam",
+     "pilot_ja": "リボンズ",
+     "hp_hard": "99000"
+    },
+    {
+     "mech_ja": "バジュラ・クィーン",
+     "mech_en": "Vajra Queen",
+     "pilot_ja": "グレイス",
+     "hp_hard": "189200"
+    }
+   ]
+  },
+  {
+   "stage": "第59話",
+   "title": "最後の聖王",
+   "atwiki_page": 230,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/230.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "92000"
+    },
+    {
+     "mech_ja": "人造次元獣エクサ・アダモン",
+     "mech_en": "Exa Adamon",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "132000"
+    },
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "162000"
+    },
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "86200"
+    }
+   ]
+  },
+  {
+   "stage": "第59話",
+   "title": "大逆のインサラウム",
+   "atwiki_page": 300,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/300.html",
+   "bosses": [
+    {
+     "mech_ja": "パレス・インサラウム",
+     "mech_en": "Palace Insaraum",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "92000"
+    },
+    {
+     "mech_ja": "パールファング",
+     "mech_en": "Pearl Fang",
+     "pilot_ja": "マリリン",
+     "hp_hard": "86200"
+    },
+    {
+     "mech_ja": "シュロウガ",
+     "mech_en": "Shrouga",
+     "pilot_ja": "アサキム",
+     "hp_hard": "84200"
+    },
+    {
+     "mech_ja": "人造次元獣エクサ・アダモン",
+     "mech_en": "Exa Adamon",
+     "pilot_ja": "アンブローン",
+     "hp_hard": "132000"
+    }
+   ]
+  },
+  {
+   "stage": "最終話",
+   "title": "再世の未来",
+   "atwiki_page": 285,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/285.html",
+   "bosses": [
+    {
+     "mech_ja": "シュロウガ",
+     "mech_en": "Shrouga",
+     "pilot_ja": "アサキム",
+     "hp_hard": "84200"
+    },
+    {
+     "mech_ja": "ゲールティラン",
+     "mech_en": "Gale Tyran",
+     "pilot_ja": "ガイオウ",
+     "hp_hard": "??????"
+    },
+    {
+     "mech_ja": "次元将ガイオウ",
+     "mech_en": "Gaiou",
+     "pilot_ja": "ガイオウ",
+     "hp_hard": "240800(323200)"
+    }
+   ]
+  },
+  {
+   "stage": "最終話",
+   "title": "再世する次元",
+   "atwiki_page": 302,
+   "url": "https://w.atwiki.jp/srwz2nd2/pages/302.html",
+   "bosses": [
+    {
+     "mech_ja": "聖王機ジ・インサー",
+     "mech_en": "Zi Inser",
+     "pilot_ja": "ユーサー",
+     "hp_hard": "162000"
+    },
+    {
+     "mech_ja": "ゲールティラン",
+     "mech_en": "Gale Tyran",
+     "pilot_ja": "ガイオウ",
+     "hp_hard": "??????"
+    },
+    {
+     "mech_ja": "次元将ガイオウ",
+     "mech_en": "Gaiou",
+     "pilot_ja": "ガイオウ",
+     "hp_hard": "240800(323200)(400300)"
+    }
+   ]
+  }
+ ]
+}

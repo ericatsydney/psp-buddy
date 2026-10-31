@@ -155,3 +155,15 @@ def test_a_done_phase_with_a_lost_ally_is_still_a_defeat():
     assert book.finish({'phase': 'done', 'turn': [7, 8]}, lost=[2]) == 'retry'
     assert book.attempts[0].outcome == 'lost' and not book.done
     assert book.start().protected == (2,)
+
+
+def test_the_unmoved_flag_is_compared_for_player_units_only():
+    # 26 Oct: state reads carry the unmoved flag for the player's own units only (stage 33 has
+    # 70 units); older manifests recorded it for foes too.
+    units = [unit(1, 5, 5), unit(2, 6, 5), unit(3, 9, 9, FOE, ready=True)]   # turn-7 style
+    saved = retry.manifest(state(units), SHA)
+    now = state([dict(u) for u in units])
+    del now['units'][2]['counted_as_unmoved']                 # the foe row is compact now
+    assert retry.mismatches(saved, now) == []
+    now['units'][0]['counted_as_unmoved'] = False              # a player unit still counts
+    assert retry.mismatches(saved, now) == ['1 unmoved True -> False']

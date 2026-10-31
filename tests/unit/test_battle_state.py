@@ -67,3 +67,15 @@ def test_decode_blob_length_checks():
         decode_cursor(b'\x00\x00', 24, 34)
     with pytest.raises(ValueError):
         decode_turn(b'\x01')
+
+
+def test_cursor_address_follows_the_pointer_before_the_cell_table():
+    # 26 Oct: 0x096007C4 held the cursor on stage 23 only; on stage 33 it sat at 0x0964BAF4.
+    # [0x08E4EA90] + 0x24 gave the cursor in 13 stage-23 dumps, 3 stage-33 dumps and 3 saves.
+    from psp_buddy.battle_state import CURSOR_POINTER_ADDRESS, cursor_address
+    assert CURSOR_POINTER_ADDRESS == 0x08E4EA90
+    assert cursor_address(struct.pack("<I", 0x0964BAD0)) == 0x0964BAF4
+    assert cursor_address(struct.pack("<I", 0x096007A0)) == 0x096007C4
+    for bad in (struct.pack("<I", 0), struct.pack("<I", 0x0A000000), b"\x00\x00"):
+        with pytest.raises(ValueError):
+            cursor_address(bad)

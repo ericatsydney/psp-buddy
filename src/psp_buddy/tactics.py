@@ -104,7 +104,7 @@ def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, st
                  factor: float = BOSS_HP_FACTOR) -> frozenset[int]:
     """Living foes named in `names` (spaces, punctuation and case ignored) or whose max HP is at
     least `factor` x the median max HP of the living foes (`factor` 0 turns the HP rule off)."""
-    foes = [u for u in units if u.get("raw_menu_group_byte") == targets.ENEMY_GROUP and _alive(u)
+    foes = [u for u in units if targets.is_foe(u.get("raw_menu_group_byte")) and _alive(u)
             and type(u.get("max_hp")) is int]
     if not foes:
         return frozenset()
@@ -148,7 +148,7 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         if row.get("will", 0) <= will and row["slot"] not in exclude:
             by_slot[row["slot"]] = dict(row)
     here = _tile(me)
-    foes = [u for u in units if u.get("raw_menu_group_byte") == targets.ENEMY_GROUP and _alive(u)]
+    foes = [u for u in units if targets.is_foe(u.get("raw_menu_group_byte")) and _alive(u)]
     for foe in foes:
         _tile(foe)
         if _int(foe.get("max_hp"), "foe_max_hp") <= 0:

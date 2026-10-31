@@ -20,6 +20,8 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  for (const changed of [{spirit_name:undefined},{spirit_name:''},{purpose:'confirm_spirit',context:'spirit_confirm',highlighted_entry:'No'}]) await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:JSON.parse(JSON.stringify({...cast,...changed}))}));
  await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'info',button:'circle',purpose:'info_page'}}));
  await client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'info',button:'right',purpose:'info_page'}});
+ await client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'unit_commands',button:'cross',purpose:'close_command_menu'}});assert.equal(calls.pop()[1].purpose,'close_command_menu');
+ await assert.rejects(client.callTool({name:'ppsspp_press_button',arguments:{...args,context:'unit_commands',button:'circle',purpose:'close_command_menu'}}));
  calls.splice(1,5);
  await client.callTool({name:'ppsspp_read_state',arguments:{sequence:3}});assert.equal(calls.length,2);
  for (const bad of [{},{sequence:0},{sequence:1,screen_file:'x.png'},{sequence:'1'}]) await assert.rejects(client.callTool({name:'ppsspp_read_state',arguments:bad}));

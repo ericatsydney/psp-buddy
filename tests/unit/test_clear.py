@@ -131,3 +131,12 @@ def test_handover_report_lists_a_late_boss_known_by_name():
 def test_the_name_key_is_shared_with_tactics():
     from psp_buddy import tactics
     assert tactics.name_key('Wing Gundam-Zero') == 'winggundamzero'
+
+
+def test_stage_33_groups_count_13_as_foe_and_ignore_npc_and_third_force():
+    units = allies() + [unit(40, 13, hp=6000), unit(41, 13, hp=7500), unit(50, 5, hp=29000),
+                        unit(60, 1, hp=5500)]
+    run = clear.begin(state(units, turn=5), {})
+    assert clear.nonboss_left(run, state(units, turn=5)) == [40, 41]
+    gone = allies() + [unit(50, 5, hp=29000), unit(60, 1, hp=5500)]
+    assert clear.decide(run, state(gone, turn=5)) == 'cleared'

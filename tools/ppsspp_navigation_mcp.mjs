@@ -9,7 +9,7 @@ import { StdioServerTransport } from '../local/mcp-ppsspp/node_modules/@modelcon
 import { CallToolRequestSchema, ListToolsRequestSchema } from '../local/mcp-ppsspp/node_modules/@modelcontextprotocol/sdk/dist/esm/types.js';
 
 const CONTEXTS = ['map','unit_commands','info','move_range','weapon_list','target_select','attack_forecast','result','system_menu','enemy_phase','spirit_pilots','spirit_list','spirit_confirm'];
-const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move','dismiss_result','open_system_menu','system_menu_move','end_turn','advance_dialog','open_spirit','spirit_pilot','spirit_menu_move','cast_spirit','confirm_spirit','info_page'];
+const PURPOSES = ['cursor','open_unit_menu','menu_direction','open_info','cancel','open_move','move_cursor','confirm_move','open_attack','select_weapon','select_target','choose_target','confirm_attack','standby_after_move','dismiss_result','open_system_menu','system_menu_move','end_turn','advance_dialog','open_spirit','spirit_pilot','spirit_menu_move','cast_spirit','confirm_spirit','info_page','close_command_menu'];
 const CIRCLE_PURPOSES = ['open_unit_menu','open_info','open_move','confirm_move','open_attack','select_weapon','choose_target','standby_after_move','dismiss_result','open_system_menu','end_turn','advance_dialog','open_spirit','spirit_pilot','cast_spirit','confirm_spirit'];
 function validate(operation, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid arguments');

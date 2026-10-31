@@ -146,7 +146,7 @@ def test_decline_after_a_move_says_the_unit_stays_moved_and_waits():
     assert result['phase'] == 'declined' and result['moved'] is True
     assert result['standby'] is True and sim.screen == 'map'
     assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 8)
-    assert sim.units[0]['counted_as_unmoved'] is False and sim.log[-2:] == ['down', 'circle']
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.log[-2:] == ['up', 'circle']
 
 
 def test_overlay_not_centred_on_the_unit_means_no_move_plan():
@@ -190,6 +190,50 @@ def test_replan_is_not_tried_after_the_unit_has_moved():
     assert 'excluded' not in result or result['excluded'] == []
     assert result['moved'] is True and result['standby'] is True
     assert sim.units[0]['counted_as_unmoved'] is False and sim.screen == 'map'
+
+
+class PostMove(Game):
+    """Exposes the post-move menu (row, count) read at 0x08E4BEB4, as the live helper does."""
+
+    async def post_move_menu(self):
+        if self.screen == 'unit_menu' and self.acting is not None and self.acting.get('moved'):
+            return self.entry, len(self.entries)
+        return None
+
+
+def test_standby_is_one_up_from_attack_on_a_longer_post_move_menu():
+    # 26 Oct live, stage 33: Methuss's post-move menu is Attack / Repair / Standby; the menu wraps
+    # (31 Oct recon m14rec3), so one Up from Attack reaches Standby whatever the length.
+    sim = PostMove(grey_rows=(2,), moved_entries=('Attack', 'Repair', 'Standby'))
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['phase'] == 'failed' and result['moved'] is True
+    assert result['standby'] is True and sim.screen == 'map'
+    assert sim.units[0]['counted_as_unmoved'] is False
+    assert 'down' not in sim.log[-4:] and sim.log[-2:] == ['up', 'circle']
+
+
+def test_standby_is_not_confirmed_when_the_menu_cursor_is_not_on_it():
+    class Stuck(PostMove):
+        async def post_move_menu(self):
+            return (0, len(self.entries)) if self.screen == 'unit_menu' else None
+
+    sim = Stuck(grey_rows=(2,), moved_entries=('Attack', 'Repair', 'Standby'))
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['standby'] is False and 'circle' != sim.log[-1]
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_no_up_is_pressed_when_the_post_move_menu_is_not_seen():
+    class Unseen(PostMove):
+        async def post_move_menu(self):
+            return None
+
+    sim = Unseen(grey_rows=(2,))
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['standby'] is False and 'up' not in sim.log
 
 
 def test_a_standby_the_game_does_not_confirm_is_reported_and_closed():
@@ -298,3 +342,35 @@ def test_an_unprotected_unit_still_fires():
     sim = Game()
     result = run(plan_act.plan_and_act(sim, POLICY, 1000, protected={1001}, hits={2000: 42}))
     assert result['phase'] == 'fired'
+
+
+def test_a_move_that_lands_on_another_tile_ends_with_standby():
+    # 31 Oct live (m14s33h): the unit moved one tile short of the plan and the turn stopped with
+    # its Attack / Standby menu open.
+    class Slips(PostMove):
+        async def press(self, button, frames=2):
+            if self.screen == 'move_range' and button == 'circle':
+                self.cursor = [self.cursor[0], self.cursor[1] - 1]
+            await super().press(button, frames)
+
+    sim = Slips()
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['phase'] == 'failed' and result['outcome']['reason'] == 'move_not_confirmed'
+    assert result['moved'] is True and result['standby'] is True
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.screen == 'map'
+
+
+def test_a_move_not_confirmed_on_the_same_tile_presses_nothing_more():
+    class Stays(PostMove):
+        async def press(self, button, frames=2):
+            if self.screen == 'move_range' and button == 'circle':
+                self.log.append(button)
+                return                                   # the game ignored the Circle
+            await super().press(button, frames)
+
+    sim = Stays()
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['outcome']['reason'] == 'move_not_confirmed' and 'standby' not in result
+    assert sim.log[-1] == 'circle'

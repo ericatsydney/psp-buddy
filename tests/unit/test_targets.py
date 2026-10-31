@@ -1,5 +1,7 @@
 """Targets in range, checked against the retained 18 October Destiny evidence."""
 
+import struct
+
 import pytest
 
 from psp_buddy.targets import ENEMY_GROUP, targets_in_range
@@ -110,10 +112,41 @@ def test_hover_hit_decoding():
     assert decode_hover_hit(struct.pack("<ii", 105, 105)) == {"state": "hit", "hit": 100,
                                                               "raw": 105}
     assert decode_hover_hit(struct.pack("<ii", 100, 100)) == {"state": "hit", "hit": 100}
-    assert decode_hover_hit(struct.pack("<ii", 201, 201))["state"] == "unknown"
+    # 26 Oct stage 33: 261 is real (fragments, all stats 1), so 201 is an uncapped chance too.
+    assert decode_hover_hit(struct.pack("<ii", 201, 201))["hit"] == 100
     # 24 Oct live (m11live1): with Sense (Aim) active the field reads 400, a sure hit.
     assert decode_hover_hit(struct.pack("<ii", 400, 400)) == {"state": "hit", "hit": 100,
                                                               "raw": 400, "sure_hit": True}
-    assert decode_hover_hit(struct.pack("<ii", 399, 399))["state"] == "unknown"
+    assert decode_hover_hit(struct.pack("<ii", 399, 399)) == {"state": "hit", "hit": 100,
+                                                              "raw": 399}
+    assert decode_hover_hit(struct.pack("<ii", 401, 401))["state"] == "unknown"
     with pytest.raises(ValueError):
         decode_hover_hit(b"\0" * 4)
+
+
+@pytest.mark.parametrize("group,foe", [(0, False), (1, False), (4, False), (5, False),
+                                       (12, True), (13, True), (None, False), ("12", False)])
+def test_foe_side_is_the_group_byte_divided_by_four(group, foe) -> None:
+    # 26 Oct, offline decode of the stage-33 states: pillar fragments (red enemy panel) read 13,
+    # NPC allies 1, the third force (Giga Adamon, Marilyn) 5; stage 23 had 0, 4 and 12.
+    from psp_buddy.targets import is_foe
+    assert is_foe(group) is foe
+
+
+def test_stage_33_pillar_fragments_are_targets_and_the_third_force_is_not() -> None:
+    units = [unit(149303288, 19, 5, 0, 5200), unit(7, 19, 7, 13, 6000), unit(8, 19, 8, 5, 29000),
+             unit(9, 18, 7, 1, 5500)]
+    found = targets_in_range(DESTINY, units, WEAPONS)
+    hit = {t["object"] for w in found["weapons"] for t in w["targets"]}
+    assert hit == {7}
+
+
+def test_hover_hit_above_200_is_an_uncapped_chance() -> None:
+    # 26 Oct, stage 33: pillar fragments (every stat 1) read 261 while the screen shows HIT 100%
+    # (the user's slot-2 save, cursor on a fragment in target select; run m14s33c failed on it).
+    from psp_buddy.targets import decode_hover_hit
+    assert decode_hover_hit(struct.pack("<ii", 261, 261)) == {"state": "hit", "hit": 100,
+                                                               "raw": 261}
+    assert decode_hover_hit(struct.pack("<ii", 399, 399))["state"] == "hit"
+    assert decode_hover_hit(struct.pack("<ii", 400, 400))["sure_hit"] is True
+    assert decode_hover_hit(struct.pack("<ii", 500, 500))["state"] == "unknown"

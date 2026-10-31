@@ -322,3 +322,20 @@ def test_non_bosses_first_when_the_policy_says_so() -> None:
     # with no grunt in reach a boss is still attacked
     alone = attack(plan_attack(state(), weapons(), policy, DESTINY, bosses={NEAR_FOE, FAR_FOE}))
     assert alone["attack"]["target_object"] == NEAR_FOE
+
+
+def test_a_group_13_pillar_fragment_is_attacked_and_third_force_group_5_is_not() -> None:
+    # Stage 33 (26 Oct offline decode): fragments read group 13, the third force group 5.
+    pillar = unit(7, 19, 7, 13, 6000, 6000, ready=False)
+    beast = unit(8, 19, 6, 5, 2000, 29000, ready=False)            # damaged and nearer
+    s = {"turn": {"turn": 5}, "units": [unit(DESTINY, 19, 5, 0, 5200, 5200, 230), pillar, beast],
+         "reachable": [[19, 4, 1], [20, 5, 1]]}
+    planned = attack(plan_attack(s, weapons(), POLICY, DESTINY))
+    assert planned["attack"]["target_object"] == 7
+
+
+def test_boss_objects_count_group_13_foes() -> None:
+    from psp_buddy.tactics import boss_objects
+    foes = [unit(1, 0, 0, 13, 6000, 6000), unit(2, 0, 1, 13, 7500, 7500),
+            unit(3, 0, 2, 13, 30000, 30000), unit(4, 0, 3, 5, 90000, 90000)]
+    assert boss_objects(foes, {}, []) == {3}

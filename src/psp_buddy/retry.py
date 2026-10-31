@@ -66,8 +66,11 @@ def mismatches(saved: Mapping[str, Any], state: Mapping[str, Any]) -> list[str]:
         if got is None:
             found.append(f"{want['object']} missing")
             continue
+        # The unmoved flag is read for the player's own units only (26 Oct: compact foe rows).
+        keys = ("hp", "en", "tile", "unmoved", "group") if want["group"] == ALLY_GROUP else (
+            "hp", "en", "tile", "group")
         found += [f"{want['object']} {key} {want[key]} -> {got[key]}"
-                  for key in ("hp", "en", "tile", "unmoved", "group") if got[key] != want[key]]
+                  for key in keys if got[key] != want[key]]
     return found
 
 

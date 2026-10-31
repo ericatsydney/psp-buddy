@@ -12,9 +12,18 @@ from collections.abc import Mapping, Sequence
 
 HOVER_HIT_ADDRESS = 0x08ED055C   # two s32; 18 Oct runs matched the on-screen HIT%
 NO_TARGET = -10000
-MAX_RAW_HIT = 200
+MAX_RAW_HIT = 399          # uncapped chance (shown as 100%); 26 Oct stage 33: 261 on a fragment
 SURE_HIT_RAW = 400
 ENEMY_GROUP = 12          # raw_menu_group_byte: 0 = ally, 4 = third force (HIT 0%), 12 = foe
+# 26 Oct (offline decode of the stage-33 states): the side is the byte // 4 (0 ally, 1 third force,
+# 3 enemy army); the low bit is a per-map flag (stage 33: NPC allies 1, third force 5, pillar
+# fragments 13). Only byte 0 is the player's own unit.
+FOE_SIDE = 3
+
+
+def is_foe(group: object) -> bool:
+    """An enemy-army unit (menu-group byte 12..15); never the third force or an ally."""
+    return type(group) is int and group >> 2 == FOE_SIDE
 
 
 def _unit_tile(unit: Mapping[str, object]) -> tuple[int, int]:
@@ -38,7 +47,7 @@ def _unusable_reason(weapon: Mapping[str, object], en: int, moved: bool) -> str 
 
 def targets_in_range(unit: Mapping[str, object], units: Sequence[Mapping[str, object]],
                      weapons: Mapping[str, object], *, moved: bool = False,
-                     enemy_groups: Sequence[int] = (ENEMY_GROUP,)) -> dict[str, object]:
+                     enemy_groups: Sequence[int] | None = None) -> dict[str, object]:
     """Per weapon: usable flag, reason if not, and the living enemies within min..max range.
 
     `unit` is a read_state unit (the acting one); `weapons` is the ppsspp_read_weapons answer.
@@ -52,7 +61,8 @@ def targets_in_range(unit: Mapping[str, object], units: Sequence[Mapping[str, ob
     if not isinstance(en, int):
         raise ValueError("unit has no EN")
     foes = [(u, abs(_unit_tile(u)[0] - x) + abs(_unit_tile(u)[1] - y)) for u in units
-            if u.get("raw_menu_group_byte") in enemy_groups
+            if (is_foe(u.get("raw_menu_group_byte")) if enemy_groups is None
+                else u.get("raw_menu_group_byte") in enemy_groups)
             and isinstance(u.get("hp"), int) and u["hp"] > 0]       # type: ignore[operator]
     rows = weapons.get("weapons")
     if not isinstance(rows, list):

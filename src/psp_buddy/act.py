@@ -26,6 +26,7 @@ ANIMATION_SECONDS = 8.0
 FIRE_NEEDS = 40.0            # seconds Start + result need (about 25 live); less: stop at forecast
 GUARD_SECONDS = 1.0
 MOVE_POLLS = 12
+CURSOR_CHECKS = 3        # cursor reads before the Move Circle (one re-walk after each miss)
 HIT_POLLS = 5                # reads waiting for a forecast that is not computed yet
 STANDBY_POLLS = 6            # reads waiting for the unit to show as acted after Standby
 DIALOGUE_PRESSES = 40        # Circles through a story dialogue after a kill (user: skip it)
@@ -331,6 +332,19 @@ class _Run:
         if not walk.get("reached"):
             raise _Stop("move", "cursor_did_not_reach_tile", {"walk": dict(walk)},
                         retreat=self.depth)
+        # A late press can move the cursor after the walk reported the tile (31 Oct live,
+        # m14s33h: (8,16) reached, the unit moved to (8,15)): look again just before the Circle.
+        for attempt in range(CURSOR_CHECKS):
+            await self.io.sleep(0.3)
+            cursor = (await self.steady(self.io.state)).get("cursor")
+            if (isinstance(cursor, Mapping)
+                    and [cursor.get("x"), cursor.get("y")] == self.move_to):
+                break
+            if attempt == CURSOR_CHECKS - 1:
+                raise _Stop("move", "cursor_not_on_destination",
+                            {"cursor": dict(cursor) if isinstance(cursor, Mapping) else None},
+                            retreat=self.depth)
+            await self.io.goto(self.move_to)
         await self.tap("circle")
         before = _units(self.state0)
         after: list[dict[str, object]] = before
@@ -533,8 +547,15 @@ class _Run:
                           "range": len(_reachable(state)), "presses": presses})
             acted = unit is not None and not unit.get("counted_as_unmoved") and (
                 unit.get("counter_value") == 0)
+            # A Hit and Away pilot that did not move gets its Move / Standby menu even after a kill
+            # (31 Oct live, m14s33g/m: Wing Gundam Zero). A Circle there chooses Move, and a range
+            # centred on the unit is that menu's Move, not the map: the cursor walks inside it.
+            # After Standby come the kill's result pages and then Continue's step, with that range
+            # still in memory, so from then on the Continue path decides.
+            ha_range = (self.hit_and_away and self.move_to is None and not standby
+                        and unit is not None and _post_attack_move(state, unit))
             if (self.continue_attack and unit is not None and unit.get("counted_as_unmoved")
-                    and self._target_destroyed(state)):
+                    and self._target_destroyed(state) and not ha_range):
                 # Continue Attack (24 Oct live, m11live7): result pages, then the plain map with
                 # the unit ready again and a stale Move range in memory. Only the map cursor
                 # tells them apart; a Circle on the map would open whatever is under it.

@@ -68,7 +68,7 @@ def nonboss_left(run: ClearRun, state: Mapping[str, Any],
     """Living foes outside the boss set (a destroyed unit vanishes from the list live, M10)."""
     names = {} if mech_names is None else mech_names
     return sorted(u["object"] for u in _units(state)
-                  if u["raw_menu_group_byte"] == targets.ENEMY_GROUP and u["hp"] > 0
+                  if targets.is_foe(u["raw_menu_group_byte"]) and u["hp"] > 0
                   and not _is_boss(run, u["object"], names))
 
 
@@ -110,11 +110,11 @@ def handover_report(run: ClearRun, state: Mapping[str, Any], reason: str, *,
     bosses += [{"object": u["object"], "name": mech_names.get(u["object"], ""), "hp": u["hp"],
                 "max_hp": u.get("max_hp"), "tile": _tile(u)}
                for u in now.values() if u["object"] not in started and u["hp"] > 0
-               and u["raw_menu_group_byte"] == targets.ENEMY_GROUP
+               and targets.is_foe(u["raw_menu_group_byte"])
                and _is_boss(run, u["object"], mech_names)]          # late, named bosses
     left = nonboss_left(run, state, mech_names)
     first = [s["object"] for s in run.start["units"]
-             if s["group"] == targets.ENEMY_GROUP and s["hp"] > 0 and s["object"] not in run.bosses]
+             if targets.is_foe(s["group"]) and s["hp"] > 0 and s["object"] not in run.bosses]
     allies = [{"object": u["object"], "hp": u["hp"], "max_hp": u.get("max_hp"), "en": u.get("en"),
                "unmoved": u.get("counted_as_unmoved") is True, "tile": _tile(u)}
               for u in now.values() if u["raw_menu_group_byte"] == retry.ALLY_GROUP]

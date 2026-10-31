@@ -89,6 +89,9 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     "confirm_spirit": (("circle",), ("spirit_confirm",), "highlighted_entry"),
     # View-only status pages of a declared unit (M12: a third-force pilot's spirit names).
     "info_page": (DIRECTIONS, ("info",), None),
+    # Start-of-run back-out only (user, 26 Oct: the stage-33 state was saved with a move range
+    # open; one `cancel` returns to the command menu). `cancel` stays refused there.
+    "close_command_menu": (("cross",), ("unit_commands",), None),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
                    "select_target", "choose_target", "confirm_attack", "standby_after_move",
@@ -134,6 +137,7 @@ class InfoNavigation:
         read_spirits: Callable[[int, int], Awaitable[Mapping[str, object]]] | None = None,
         read_spirit_cursor_bytes: Callable[[], Awaitable[list[int]]] | None = None,
         read_command_menu: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
+        read_post_move_menu: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
         act_time_scale: float = 1.0,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
@@ -164,6 +168,7 @@ class InfoNavigation:
         self._spirit_reads = 0
         self._read_spirit_cursor_bytes = read_spirit_cursor_bytes
         self._read_command_menu = read_command_menu
+        self._read_post_move_menu = read_post_move_menu
         self._act_scale = act_time_scale
         self._acts = 0
         self._act_presses = 0
@@ -477,6 +482,8 @@ class InfoNavigation:
             raise ValueError("button or screen context not allowed for this purpose")
         if not _integer(arguments["duration"], 1, 3):
             raise ValueError("duration must be 1..3 frames")
+        if purpose == "close_command_menu" and self._played():
+            raise ValueError("the command menu may be closed only before the first action")
         if purpose in ACTION_PURPOSES:
             self._check_action(purpose, arguments)
         tile = arguments.get("cursor_tile")
@@ -730,6 +737,13 @@ class InfoNavigation:
             self._pending = str(outcome.get("reason") or "enemy_phase_stopped")
         return {**outcome, "report_error": error} if error else outcome
 
+    def _played(self) -> bool:
+        """Anything beyond backing out has happened in this trial (an act, a cursor walk, a move
+        probe, End Turn or a recorded unit)."""
+        return bool(self._acts or self._act_presses or self._goto_presses or self._probes
+                    or self._end_phase is not None or self._end_menu_open
+                    or self._turn.entries or self._player_turns > 1)
+
     def _used(self, counter: str) -> int:
         """A PER_TURN counter's use in this player turn."""
         used: int = getattr(self, counter) - self._turn_base.get(counter, 0)
@@ -782,7 +796,7 @@ class InfoNavigation:
         for unit in units:
             obj = unit.get("object") if isinstance(unit, Mapping) else None
             if (type(obj) is not int or obj in self._mech_names or obj in self._name_failed
-                    or unit.get("raw_menu_group_byte") != targets.ENEMY_GROUP
+                    or not targets.is_foe(unit.get("raw_menu_group_byte"))
                     or self._used("_weapon_reads") >= MAX_WEAPON_READS):
                 continue
             self._weapon_reads += 1
@@ -918,6 +932,12 @@ class InfoNavigation:
                 if nav._read_command_menu is None:
                     raise act_macro.ActIOError("no command menu reader in this trial")
                 result: tuple[int, int] | None = await nav._act_read(nav._read_command_menu())
+                return result
+
+            async def post_move_menu(self) -> tuple[int, int] | None:
+                if nav._read_post_move_menu is None:
+                    raise act_macro.ActIOError("no post-move menu reader in this trial")
+                result: tuple[int, int] | None = await nav._act_read(nav._read_post_move_menu())
                 return result
 
             async def sleep(self, seconds: float) -> None:

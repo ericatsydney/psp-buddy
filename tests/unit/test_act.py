@@ -58,7 +58,7 @@ class SimGame:
         if s in ('map', 'move_range', 'target_select') and step:
             self.cursor = [self.cursor[0] + step[0], self.cursor[1] + step[1]]
         elif s == 'unit_menu' and step:
-            self.entry = max(0, min(len(self.entries) - 1, self.entry + step[1]))
+            self.entry = (self.entry + step[1]) % len(self.entries)    # wraps (31 Oct live)
         elif s == 'weapon_list' and step and not self.flags.get('row_stuck'):
             self.row = max(0, min(len(self.weapons) - 1, self.row + step[1]))
         elif s == 'map' and button == 'circle':
@@ -832,3 +832,79 @@ def test_a_dialogue_after_an_attack_without_a_kill_is_skipped_too():
     result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
     assert result['ok'] is True and sim.screen == 'map'
     assert result['stages'][-1]['facts']['dialogue_presses'] == 3
+
+
+class ContinueHitAndAway(ContinueAttack):
+    """31 Oct live (m14s33g/m, Wing Gundam Zero: Continue and Hit and Away): a kill made without
+    moving goes straight to the Hit and Away Move / Standby menu; a Circle there chooses Move and
+    shows its range. After Standby come the kill's result pages, then the Continue bonus step on
+    the map with the unit still unmoved and the Move range lingering in memory."""
+
+    async def press(self, button, frames=2):
+        if self.screen == 'ha_menu' and button == 'circle' and self.entry == 1:
+            self.log.append(button)
+            self.screen, self.linger = 'result', 50       # Standby: result pages, range stays
+            return
+        await super().press(button, frames)
+
+    async def goto(self, tile):
+        if self.screen == 'ha_menu':                  # a menu locks the map cursor
+            self.log.append(f'goto{tuple(tile)}')
+            return {'reached': False, 'cursor': {'x': self.cursor[0], 'y': self.cursor[1]}}
+        return await super().goto(tile)
+
+    async def state(self):
+        answer = await super().state()
+        if self.screen in ('ha_menu', 'post_move', 'result'):   # the kill shows from then on
+            foe = next(u for u in self.units if u['raw_menu_group_byte'] == 12)
+            if foe['hp']:
+                foe['hp'] = 0
+                answer = await super().state()
+        if self.screen in ('post_move', 'result', 'map') and self.linger:
+            ax, ay = self.acting['tile_x'], self.acting['tile_y']
+            answer['reachable'] = [[ax + dx, ay + dy, abs(dx) + abs(dy)]
+                                   for dx in range(-3, 4) for dy in range(-3, 4)
+                                   if 0 < abs(dx) + abs(dy) <= 3]
+        return answer
+
+
+def test_a_kill_without_a_move_by_a_hit_and_away_pilot_with_continue_chooses_standby():
+    sim = ContinueHitAndAway(ha_skill=True, post_attack_move=True, ha_direct=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is True and result['phase'] == 'done'
+    after = [b for b in sim.log[sim.log.index('start') + 1:] if not b.startswith('goto')]
+    assert after[:4] == ['circle', 'cross', 'down', 'circle']        # Move shown, then Standby
+    assert result['bonus_action'] is True                            # then Continue's step
+    assert sim.screen == 'map' and sim.units[0]['counted_as_unmoved'] is True
+
+
+class LateCursor(SimGame):
+    """31 Oct live (m14s33h): the walk reported (8,16) reached, then the cursor moved one more tile
+    before the Circle and the unit moved to (8,15)."""
+
+    def __init__(self, drifts=1, **flags):
+        super().__init__(**flags)
+        self.drifts = drifts
+
+    async def goto(self, tile):
+        answer = await super().goto(tile)
+        if self.screen == 'move_range' and self.drifts > 0:
+            self.drifts -= 1
+            self.cursor = [self.cursor[0], self.cursor[1] - 1]       # a late Up press lands
+        return answer
+
+
+def test_a_cursor_that_drifts_after_the_walk_is_walked_back_before_the_move():
+    sim = LateCursor()
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is True
+    assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 7)
+
+
+def test_a_cursor_that_keeps_drifting_is_not_confirmed():
+    sim = LateCursor(drifts=10)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
+    assert result['ok'] is False and result['reason'] == 'cursor_not_on_destination'
+    assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 5)
+    assert sim.screen == 'map'

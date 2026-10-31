@@ -1030,3 +1030,46 @@ def test_end_turn_open_settles_a_pending_dialogue_first(owned, tmp_path, monkeyp
     answer = asyncio.run(service.execute('end_turn', frame(sequence=1, phase='open')))
     assert answer['ok'] is False and answer['reason'] == 'dialogue_not_finished'
     assert calls == ['settle']
+
+
+# ---- Stage 33: a state saved mid-move (start-of-run back-out) ------------------------------
+
+def close_menu(frame, sequence):
+    return frame('unit_commands', sequence=sequence, purpose='close_command_menu', button='cross',
+                 duration=2)
+
+
+def test_the_command_menu_may_be_closed_before_the_first_action(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        await service.execute('press', frame('move_range', sequence=1, purpose='cancel',
+                                              button='cross', duration=2))
+        await service.execute('press', close_menu(frame, 2))
+    asyncio.run(scenario())
+    assert adapter.sent == ['cross', 'cross']
+
+
+def test_closing_the_command_menu_is_refused_once_the_trial_has_played(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        fired = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert fired['phase'] == 'fired'
+        sent = len(adapter.sent)
+        with pytest.raises(NavigationRefused, match='first action'):
+            await service.execute('press', close_menu(frame, 2))
+        assert len(adapter.sent) == sent
+    asyncio.run(scenario())
+
+
+def test_close_command_menu_is_cross_on_the_command_menu_only(owned, tmp_path):
+    service, adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        for bad in (dict(button='circle'), dict(context='map'), dict(context='result')):
+            args = {**close_menu(frame, 1), **bad}
+            with pytest.raises(NavigationRefused):
+                await service.execute('press', args)
+    asyncio.run(scenario())
+    assert adapter.sent == []
