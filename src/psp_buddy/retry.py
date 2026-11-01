@@ -42,15 +42,22 @@ def _record(u: Mapping[str, Any]) -> dict[str, Any]:
             "tile": [u["tile_x"], u["tile_y"]], "unmoved": u.get("counted_as_unmoved") is True}
 
 
-def manifest(state: Mapping[str, Any], file_sha256: str) -> dict[str, Any]:
-    """What a checkpoint must reproduce: turn and every unit's HP, EN, tile and unmoved flag."""
+def snapshot(state: Mapping[str, Any], file_sha256: str) -> dict[str, Any]:
+    """What a loaded save state must reproduce, at any point of a turn (M15: a user's slot is
+    usually mid-turn); `mismatches` compares against it like a manifest."""
     if not re.fullmatch(r"[0-9a-f]{64}", file_sha256):
         raise ValueError("checkpoint hash must be a SHA-256 hex digest")
-    units = [_record(u) for u in _units(state)]
-    allies = [u for u in units if u["group"] == ALLY_GROUP and u["hp"] > 0]
+    return {"sha256": file_sha256, "turn": _turn(state),
+            "units": [_record(u) for u in _units(state)]}
+
+
+def manifest(state: Mapping[str, Any], file_sha256: str) -> dict[str, Any]:
+    """What a checkpoint must reproduce: turn and every unit's HP, EN, tile and unmoved flag."""
+    found = snapshot(state, file_sha256)
+    allies = [u for u in found["units"] if u["group"] == ALLY_GROUP and u["hp"] > 0]
     if not allies or not all(u["unmoved"] for u in allies):
         raise ValueError("a checkpoint needs the start of a player phase (every ally unmoved)")
-    return {"sha256": file_sha256, "turn": _turn(state), "units": units}
+    return found
 
 
 def mismatches(saved: Mapping[str, Any], state: Mapping[str, Any]) -> list[str]:

@@ -39,6 +39,29 @@ failed with PPSSPP's "Could not download output". The helper stopped safely; the
 built-in screenshot route then passed in a fresh trial. Fully unattended runtime capture
 remains unverified. Review findings are resolved.
 
+## 2c. Next short-term goal — M15 real-test readiness (user priority, 31 Oct)
+
+Goal: the user picks any of their own save states, runs one command, and the runner clears the non-boss foes
+(or hands over cleanly) with no manual steps. Today it works only on two prepared states (turn-7 checkpoint,
+stage 33) and needs hand-made set-up and a manual back-out. Design approved 31 Oct (approach A: prepare offline from the slot copy, confirm live):
+[spec](superpowers/specs/2026-11-01-real-test-readiness-design.md), [plan](superpowers/plans/2026-11-01-real-test-readiness.md). User choices: input = PPSSPP slot number; an
+unidentified opening screen stops with no press; a low cursor budget hands over mid-turn (`turn_budget`);
+P5 is a stretch task.
+
+Priority order:
+- [ ] P1 Any save state as input: copy the user's chosen slot into a trial checkpoint, hash it, and pick the
+  anchor ally from the live state at launch (today: offline decode and a hand-written manifest per save).
+- [ ] P2 Automatic start-up back-out: work out the opening screen from memory (target select, weapon list,
+  Command menu, post-move menu slot 0x08E4BEB4, move range) and close it down to the map, proven by a cursor
+  walk (today: done by hand with a screenshot before each press).
+- [ ] P3 Long turns within the kept 400-press cursor budget: fewer cursor presses per action (skip walks that
+  memory already proves), and when the budget runs low, hand over cleanly on the map instead of stopping.
+- [ ] P4 One-command launcher: wait for a quiet machine, launch detached, check, back out, play, write the final
+  report and screenshot; refuse cleanly (nothing launched) under load.
+- [ ] P5 Unknown menus and skills: read menu entry counts from memory instead of per-mech tables (Spirit row,
+  Repair/Supply entries); anything still unknown hands over safely.
+- [ ] P6 Real test: run end to end on 2-3 other user saves from different stages; record each result.
+
 ## 2b. Current short-term goal — live state reading and agent-chosen actions (19 Oct)
 
 Plan: [plan](superpowers/plans/2026-10-19-live-state-and-chosen-actions.md), [design](superpowers/specs/2026-10-19-live-state-and-chosen-actions-design.md).
@@ -205,13 +228,144 @@ Lessons: launch `restart.ps1` detached (WMI `Win32_Process Create`); a shell-lau
 (m14s33e). Long background greps over `local/` starve the backup gate (m14s33d). A move/standby declaration may
 name "Destiny" = the checkpoint anchor (local helper fix, test first).
 
-Next step: with the 400-press budget kept, the runner stops when a long turn uses it up. Options for the
+Next step: M15 real-test readiness (section 2c, user priority 31 Oct), starting with its design. Before that,
+with the 400-press budget kept, the runner stops when a long turn uses it up. Options for the
 next session: spend fewer cursor presses per action (e.g. skip the map-proof walk where memory already proves
 the map), or accept the stop and hand over mid-turn as `turn_budget`-style handover (not a stop with a reason).
 Rerun stage 33 from `stage33-slot2` as before (back-out: target_select cancel, weapon_list cancel,
 close_command_menu, move_range cancel; goto (19,17); `clear_loop.py 7`). See
 [31 Oct handover](research/2026-10-31-m14-handover.md).
 Checks now: pytest 1628 / 1 skipped, helper 195, node 8, ruff, strict mypy. Uncommitted since 9c4d836.
+
+## 3. Today/session goal — 31 October (M15 design)
+
+- [x] M15 design approved (approach A) after four questions.
+- [x] Spec and plan written (uncommitted).
+- [x] Progress notes updated.
+
+- [x] Task 1 (offline, /loop): the UI window pool (0x08E4B9F8, free count 0x08E4BB9C) names every menu screen
+  on both stages by its open window objects; the stage-33 checkpoint reads as target select offline.
+  Open: the "range view" left after closing a Command menu has no pool object, same as the map (Task 1b).
+  [Notes](research/2026-11-01-m15-screen-signatures.md).
+
+- [x] Task 2 (red-first): `src/psp_buddy/slot_prepare.py` (`choose_anchor`, `manifest`) and `retry.snapshot`
+  (a mid-turn save's retry block; `retry.manifest` still needs a phase start). pytest 1636 / 1 skipped, ruff,
+  strict mypy.
+
+- [ ] Task 4 (in progress): `src/psp_buddy/press_budget.py` done red-first (`reach_unit`, `act_cost`, `fits`).
+  The m14s33n logs do not record cursor presses per action (act walks are unlogged), so the margin comes from
+  the code: taps only (long holds off), two 2-press map proofs + 2 for a drift re-walk = 6; Spirit +2.
+
+  `turn_next` now hands over `cursor_budget` (on the map, before any press; handover.json lists every
+  ally's unmoved flag) when reaching the next unit would overrun the 400 presses. The name `turn_budget` is
+  already the M13 player-turn limit, so the spec's mid-turn handover is called `cursor_budget`. The refusal
+  text says "turn". pytest 1644 / 1 skipped, ruff, strict mypy.
+
+  Second check done: `plan_act` compares `press_budget.act_cost` (unit -> destination -> target, Spirit
+  +2) with the act IO's `cursor_presses_left()` after planning and before any press; over budget it answers
+  handover `cursor_budget` (a skip in `turn.SKIP_HANDOVERS`), and the next `turn_next` hands the turn over.
+  pytest 1646 / 1 skipped, helper 195, clear_loop 6, ruff, strict mypy.
+
+  Map-proof skip dropped: `act._cursor_walks` proves the map against dialogue and result pages, which
+  open no UI-pool window, so the pool cannot replace it (saving would be 2-4 presses per action).
+- [ ] Task 3 (proven part, red-first): `src/psp_buddy/screen.py` (`open_windows`, `classify`, `backout`)
+  from the Task 1 table; all 28 labelled retained dumps classify correctly and the stage-33 checkpoint
+  reads `target_select` with a 3-Cross back-out. Open (Task 1b): the range view also reads `no_menu`;
+  `post_move_menu` and `spirit_list` have no proven back-out (refused). pytest new 21, ruff, strict mypy.
+
+- [x] Task 5: `local/m15-tools/prepare.py` (red-first, 10 tests with fakes; RAM-image adapter for the
+  collector with all code anchors verified). Offline on the user's slot 2: same SHA-256, turn 5 and all 70
+  retry units as the hand-made `stage33-slot2` manifest (0 field differences), opening `target_select`;
+  anchor 149299024 (lowest-object rule). Slots 0 and 1 prepare too but open on `unknown` screens (new
+  windows; see the research note), so `run` would refuse them. Test checkpoints: `m15-s33-check`,
+  `m15-slot0-check`, `m15-slot1-check`.
+
+- [ ] Task 6 (in progress): the helper's `state` answer now carries `screen` and `ui_windows` (one more
+  580-byte read of the UI pool in the same pause as the map blobs; an unparsable pool reads `unreadable`,
+  never a refusal). Red-first: 2 new helper tests, 2 older fakes given a pool region. Helper 197 + m15-tools
+  10 + clear_loop 6 pass; `prepare.py` updated for the extra blob and re-checked on slot 2.
+
+  `local/m15-tools/backout.py` done: live `state.screen` must equal the prepared opening; one Cross per step
+  with a fresh screenshot and the current screen as context, re-read, require the step's `expect`; `goto` the
+  anchor tile at `no_menu`; outcomes `map`, `unknown_opening_screen`, `opening_mismatch`,
+  `backout_unexpected_screen`, `cursor_proof_failed`, `press_refused`, `state_unreadable`,
+  `backout_too_long` (cap 6). 9 tests (written with the code, so red not observed; two mutations each
+  caught). m15-tools 19 pass.
+
+  `local/m15-tools/run.py` done (red-first, 9 tests with fakes): refusals before launch (`no_manifest`,
+  `unknown_opening_screen`, `machine_busy`), WMI-detached `restart.ps1`, `launch_failed` / `helper_failed`,
+  SCREENSHOT folder + 90 s settle + second CPU gate, `checkpoint_mismatch`, back-out, clear loop,
+  `local/m15-runs/<L>/m15-report.json` (originals line, backup line, back-out, clear summary).
+  m15-tools 28 + clear_loop 6 pass. All P1-P4 pieces exist offline; none has run live yet.
+
+- [x] Task 7 live on stage 33 (user: "Use slot 2"): `prepare.py --slot 2 --name m15-s33`, then
+  `run.py m15-s33`. m15s33a: PPSSPP crashed on its own about 1 min after start-up, before any input (the
+  recurring fault 0xc0000005 at offset 0x864414, 13 times since 14 Oct); stopped `state_unreadable`, nothing
+  pressed. **m15s33b passed with no manual step**: backout 3 Crosses checked from memory
+  (target_select -> weapon_list -> unit_commands -> no_menu) plus the cursor walk; turn 5: 14 fired; End
+  Turn + enemy phase -> turn 6: 18 fired; then a clean `cursor_budget` handover on the map (no menu,
+  final screenshot ULJS00460_00047), non-boss foes 41 -> 18, **no ally lost**, 8 allies left unmoved for
+  the user. Both backups 54/54 verified, originals 0/54 changed. Report:
+  `local/m15-runs/m15s33b/m15-report.json`. Task 1b is answered: the 26 Oct "range view" is the map's
+  hover highlight, so `no_menu` + a working cursor walk is the map ([note](research/2026-11-01-m15-screen-signatures.md)).
+  PPSSPP is left open on the m15s33b trial copy at the handover.
+
+- [x] 1 Nov: run timing (m15s33b, ~57 min): ~8 min start-up overhead, turn 5 ~21 min, enemy phase ~3 min,
+  turn 6 ~25 min; ~80 s per attack. Cause of slow reads found: every pause, resume and press runs
+  `LaunchSession.assert_bound()`, which starts PowerShell (`Get-CimInstance`, 0.85 s measured) — about
+  2,500 times a run. User approved the fix design: instant handle checks every call, full identity check at
+  most every 30 s ([spec](superpowers/specs/2026-11-01-faster-reads-design.md),
+  [plan](superpowers/plans/2026-11-01-faster-reads.md)). Later speed-ups (lighter reads, battle animations
+  off, skip repeated map proof, trim sleeps) are separate follow-ups.
+
+- [x] 1 Nov: faster reads implemented (launch.py periodic identity check; act hover/range polls after
+  fr-s33a fired 24 instead of 32 at 27 min). Live recheck fr-s33b running. Fast-screenshot design approved
+  (PPSSPP's own screenshot via ctypes, poll for the file; debugger capture failed here in Oct):
+  [spec](superpowers/specs/2026-11-01-fast-screenshots-design.md),
+  [plan](superpowers/plans/2026-11-01-fast-screenshots.md).
+
+- [ ] fr-s33b (with hover/range polls) stopped after ~14 min (turn 5, 10 actions in): the emulator's
+  debugger did not answer one memory read for 60 s (adapter timeout, config.json), right after two Down
+  presses in the weapon list; helper disabled itself, nothing else pressed, PPSSPP still running (no crash
+  in the Application log). Backups 54/54 verified, originals 0/54 changed. Cause unproven. Hypothesis: with
+  fast reads, pauses now follow presses and each other within milliseconds (before: >= ~0.5 s from the
+  PowerShell check), which PPSSPP's stepping may not tolerate. Not yet fixed.
+
+- [x] 1 Nov, user "Yes, add gap": `DebuggerAdapter` waits until 0.2 s after a press / 0.1 s after a resume
+  before a new pause. **fr-s33c passed**: 31 min total (m15s33b: 57), turn 5 ~14 min (was ~21), turn 6
+  ~13 min (was ~25), 15 + 17 = 32 attacks (same as m15s33b), no failure stages, no stall, no ally lost,
+  non-boss 41 -> 17, clean `cursor_budget` handover on the map. Reads median 0.11 s (was 1.0). Backups
+  54/54 verified, originals 0/54 changed. PPSSPP left open on the fr-s33c trial copy.
+
+- [x] 1 Nov: fast screenshots implemented (`local/m9-tools/fast_shot.py`, ctypes, polls the folder;
+  `turn_loop_lib.shot` uses it; run.py reports shot timings). **fs-s33a**: 47 screenshots, all accepted,
+  median 0.73 s, max 3.44 s (was ~5 s each); 15 + 18 = 33 attacks, no failure stages, no ally lost,
+  non-boss 41 -> 15, clean `cursor_budget` handover. But total 41 min (fr-s33c: 31): every step ran
+  ~15-20% slower (reads 0.70 vs 0.58 s avg, Circle 1.71 vs 1.44 s) and start-up took ~7 min (was ~4);
+  CPU was at 69% after the run (other apps). Likely machine load, not proven. Backups 54/54, originals
+  0/54 changed.
+
+- [x] 1 Nov, user "remove the excessive cursor move": per-run skip of mechs with an unknown Command menu
+  layout, and a memory map proof after a menu-only back-out
+  ([spec](superpowers/specs/2026-11-01-fewer-cursor-moves-design.md)). **cm-s33a**: 26.5 min total
+  (fs-s33a 41, fr-s33c 31, m15s33b 57); play 22.6 min; 15 + 18 = 33 attacks, no failure stages, no ally
+  lost, non-boss 41 -> 15, clean `cursor_budget` handover; 8 Spirit attempts skipped with no input;
+  screenshots median 0.71 s, max 0.76; backups 54/54, originals 0/54 changed.
+- Battle animations: the user turns them off in their own game (user, 1 Nov); a new checkpoint must be
+  prepared from a save state made after that. The fixed 8 s wait after Start stays until such a run.
+
+- [x] 1 Nov: code review (high) of all M15 and speed-up changes: 7 findings, 5 fixed test-first
+  (Spirit skip only on a plausible row-0 read; fast_shot sends no keys unless PPSSPP is in front and
+  retries a locked file; run.py names `emulator_exited`; press_budget docstring), 2 left as minor (fast_shot
+  could pick another PPSSPP top-level window; hover/range polls overlap the adapter press gap). After
+  fixes: pytest 1682/1 skipped, ruff, strict mypy, node 8, helper 196, tool tests 45. Committed at the
+  user's request (local/ tools stay ignored, as before).
+
+Next step: when the user names the re-saved slot (animations off), `prepare.py --slot N --name
+m15-s33-noanim` and run it; then P6 (other saves). Still open: Task 10 checks + code review of the M15 diff (user: later);
+`run.py` should name an emulator crash (`emulator_exited`) instead of `state_unreadable`; P6 needs other
+saves (slots 0 and 1 refuse with `unknown` openings).
+Uncommitted: this file, the M15 and faster-reads specs and plans, all M15 code.
 
 ## Session goal history — 20 October
 

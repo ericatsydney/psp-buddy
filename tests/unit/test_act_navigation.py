@@ -1073,3 +1073,81 @@ def test_close_command_menu_is_cross_on_the_command_menu_only(owned, tmp_path):
                 await service.execute('press', args)
     asyncio.run(scenario())
     assert adapter.sent == []
+
+
+# ---- M15: the per-turn cursor budget hands over on the map ------------------------------------
+
+def test_turn_next_hands_over_cursor_budget_when_reaching_the_unit_would_not_fit(owned, tmp_path):
+    import json
+
+    from psp_buddy import info_navigation, press_budget
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    unit = next(u for u in sim.units if u['object'] == BASE + 1000)
+    cost = press_budget.reach_unit(tuple(sim.cursor), (unit['tile_x'], unit['tile_y']))
+    service._goto_presses = info_navigation.MAX_GOTO_PRESSES - cost + 1
+
+    async def scenario():
+        answer = await service.execute('turn_next', {'sequence': 1})
+        assert answer['handover'] == {'reason': 'cursor_budget'}
+        assert answer['unit_object'] is None and answer['done'] is False
+        data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+        assert data['reason'] == 'cursor_budget' and data['screen_state'] == 'map'
+        assert any(a['unmoved'] for a in data['allies'])
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_turn_next_plays_on_when_reaching_the_unit_fits_exactly(owned, tmp_path):
+    from psp_buddy import info_navigation, press_budget
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    unit = next(u for u in sim.units if u['object'] == BASE + 1000)
+    cost = press_budget.reach_unit(tuple(sim.cursor), (unit['tile_x'], unit['tile_y']))
+    service._goto_presses = info_navigation.MAX_GOTO_PRESSES - cost
+
+    answer = asyncio.run(service.execute('turn_next', {'sequence': 1}))
+    assert answer['handover'] is None and answer['unit_object'] == BASE + 1000
+
+
+def test_the_cursor_budget_refusal_names_the_turn():
+    import inspect
+
+    from psp_buddy import info_navigation
+    source = inspect.getsource(info_navigation.InfoNavigation._goto)
+    assert 'for this turn' in source and 'for this trial' not in source
+
+
+def _cost_of_planned_act(sim, unit_object):
+    from psp_buddy import press_budget
+    unit = next(u for u in sim.units if u['object'] == unit_object)
+    foe = min((u for u in sim.units if u['raw_menu_group_byte'] == 12),
+              key=lambda u: abs(u['tile_x'] - unit['tile_x']) + abs(u['tile_y'] - unit['tile_y']))
+    return press_budget.act_cost((unit['tile_x'], unit['tile_y']), destination=None,
+                                 target=(foe['tile_x'], foe['tile_y']))
+
+
+def test_plan_act_hands_over_cursor_budget_before_a_walk_it_cannot_finish(owned, tmp_path):
+    from psp_buddy import info_navigation
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    service._goto_presses = info_navigation.MAX_GOTO_PRESSES - 1
+
+    async def scenario():
+        answer = await service.execute('plan_act', frame(sequence=1, policy='', **request()))
+        assert answer['phase'] == 'handover' and answer['reason'] == 'cursor_budget'
+        assert answer['moved'] is False
+        nxt = await service.execute('turn_next', {'sequence': 2})
+        assert nxt['handover'] == {'reason': 'cursor_budget'} and nxt['unit_object'] is None
+    asyncio.run(scenario())
+    assert adapter.sent == []
+
+
+def test_plan_act_fires_when_the_planned_walks_fit(owned, tmp_path):
+    from psp_buddy import info_navigation
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    service._goto_presses = (info_navigation.MAX_GOTO_PRESSES
+                             - _cost_of_planned_act(sim, BASE + 1000) - 20)
+    answer = asyncio.run(service.execute('plan_act', frame(sequence=1, policy='', **request())))
+    assert answer['phase'] == 'fired'

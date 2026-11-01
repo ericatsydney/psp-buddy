@@ -27,8 +27,9 @@ FIRE_NEEDS = 40.0            # seconds Start + result need (about 25 live); less
 GUARD_SECONDS = 1.0
 MOVE_POLLS = 12
 CURSOR_CHECKS = 3        # cursor reads before the Move Circle (one re-walk after each miss)
-HIT_POLLS = 5                # reads waiting for a forecast that is not computed yet
+HIT_POLLS = 5                # reads waiting for a forecast or hover that is not updated yet
 STANDBY_POLLS = 6            # reads waiting for the unit to show as acted after Standby
+RANGE_POLLS = 6              # reads waiting for the move range to be drawn (fast reads, 1 Nov)
 DIALOGUE_PRESSES = 40        # Circles through a story dialogue after a kill (user: skip it)
 DIALOGUE_RESERVE = 10.0      # seconds kept back: a longer dialogue is left for the next call
 CIRCLE_AFTER_POLLS = 4       # spend checks after Start before Circling through a dialogue
@@ -321,8 +322,7 @@ class _Run:
         await self.tap("circle")
         self.depth = 2
         await self.io.sleep(0.8)
-        state = await self.io.state()
-        reachable = _reachable(state)
+        reachable = _reachable(await range_when_drawn(self.io, here))
         if not centered(here, reachable):
             raise _Stop("move", "range_not_centered_on_unit", retreat=self.depth)
         if (self.move_to[0], self.move_to[1]) not in {(x, y) for x, y, _ in reachable}:
@@ -418,10 +418,11 @@ class _Run:
 
     async def _hit_when_ready(self) -> Mapping[str, object]:
         """Hover hit chance; "unknown" right after the cursor lands means not computed yet (22 Oct
-        live: Shenlong Vulcan), so poll briefly. "no_target" and real values are final."""
+        live: Shenlong Vulcan), so poll briefly. "no_target" is polled too: with fast reads the
+        first read can come before the hover follows the cursor (fr-s33a, 1 Nov)."""
         hit = await self.io.hit()
         for _ in range(HIT_POLLS):
-            if hit.get("state") != "unknown":
+            if hit.get("state") not in ("unknown", "no_target"):
                 break
             self.guard()
             await self.io.sleep(0.6)
@@ -620,6 +621,18 @@ class _Run:
         dialogue = await self._through_dialogue()
         self.record("result", presses=presses, post_attack_standby=standby, trace=trace[-8:],
                     dialogue_presses=dialogue)
+
+
+async def range_when_drawn(io: ActIO, tile: Sequence[int]) -> Mapping[str, object]:
+    """The state once the move range is centred on `tile`, or the last read if it never is.
+    With 1 s reads the range was always drawn by the first read; fast reads can come first."""
+    state = await io.state()
+    for _ in range(RANGE_POLLS):
+        if centered(tile, _reachable(state)):
+            break
+        await io.sleep(0.3)
+        state = await io.state()
+    return state
 
 
 async def _cursor_walks(io: ActIO, state: Mapping[str, object]) -> bool:

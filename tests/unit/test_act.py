@@ -158,6 +158,9 @@ class SimGame:
                          if 0 < abs(dx) + abs(dy) <= 3]
         if self.screen == 'move_range' and self.flags.get('range_stale'):
             reachable = [[20, 20, 1], [21, 20, 2]]
+        if self.screen == 'move_range' and self.flags.get('range_late', 0) > 0:
+            self.flags['range_late'] -= 1          # the range is drawn a little after the menu
+            reachable = []
         return {'turn': {'turn': 7}, 'cursor': {'x': self.cursor[0], 'y': self.cursor[1]},
                 'units': copy.deepcopy(self.units), 'reachable': reachable}
 
@@ -173,6 +176,9 @@ class SimGame:
                 if self.flags.get('hit_slow', 0) > 0:     # forecast not computed yet
                     self.flags['hit_slow'] -= 1
                     return {'state': 'unknown', 'hit': None}
+                if self.flags.get('hover_late', 0) > 0:   # hover not updated after the walk
+                    self.flags['hover_late'] -= 1
+                    return {'state': 'no_target', 'hit': None}
                 return {'state': 'hit', 'hit': 42}
             return {'state': 'no_target', 'hit': None}
         return {'state': 'unknown', 'hit': None}
@@ -607,6 +613,20 @@ def test_hit_chance_that_is_not_ready_yet_is_polled_not_failed():
     sim = SimGame(hit_slow=2)
     result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
     assert result['ok'] is True and result['forecast']['hit'] == 42
+
+
+def test_a_hover_that_still_shows_no_target_right_after_the_walk_is_polled():
+    # fr-s33a (1 Nov): with fast reads the first hit read can come before the game updates the
+    # hover for the new tile; four units stopped with target_not_hittable on a foe in range.
+    sim = SimGame(hover_late=2)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
+    assert result['ok'] is True and result['forecast']['hit'] == 42
+
+
+def test_a_move_range_drawn_after_the_first_read_is_polled():
+    sim = SimGame(range_late=2)
+    result = run(act.run_act(MOVE_ATTACK, sim, commit=False))
+    assert result['ok'] is True
 
 
 def test_hit_chance_that_never_becomes_readable_still_backs_out():

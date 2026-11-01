@@ -15,7 +15,7 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 from . import act as act_macro
-from . import battle_state, clear, end_turn, plan_act, targets, turn
+from . import battle_state, clear, end_turn, plan_act, press_budget, targets, turn
 from .backup import _safe_path
 from .debugger import DebuggerAdapter
 from .launch import LaunchSession
@@ -31,7 +31,7 @@ MAX_WEAPON_READS = 200
 MAX_PROTECTED = 26                 # M12 retries: allies lost in earlier attempts
 MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
-MAX_GOTO_PRESSES = 400              # cursor-only presses per trial (separate from the tap budget)
+MAX_GOTO_PRESSES = 400              # cursor-only presses per turn (separate from the tap budget)
 MAX_PROBES = 60
 MAX_ACTS = 40
 MAX_ACT_PRESSES = 1000              # presses sent by `act` per trial (taps and cursor walks)
@@ -182,6 +182,7 @@ class InfoNavigation:
         self._map_size = map_size
         self._poll = poll_seconds
         self._goto_presses = 0
+        self._cursor_spent = False          # M15: a plan_act found its walks over budget
         self._settle = settle_seconds
         self._ally_tiles = (None if ally_tiles is None
                             else {(int(x), int(y)) for x, y in ally_tiles})
@@ -191,6 +192,7 @@ class InfoNavigation:
             (int(x), int(y)) for x, y in occupied_tiles}
         self._menu_open = False
         self._mech_names: dict[int, str] = {}     # foe mech names: static within a battle
+        self._spirit_skip: set[str] = set()       # mechs with an unknown Command menu layout
         self._name_failed: set[int] = set()       # foes whose name read failed (not retried)
         self._clear: clear.ClearRun | None = None  # M13: fixed at the first turn_next
         self._handover: str | None = None         # M13: the handover reason; input is over
@@ -653,7 +655,7 @@ class InfoNavigation:
             min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
             damage_log=self._evidence / "damage-log.jsonl", boss_names=names,
             mech_names=self._mech_names, settle_first=self._dialogue_pending,
-            protected=frozenset(guarded))
+            protected=frozenset(guarded), spirit_skip=self._spirit_skip)
         self._act_pending = None
         done = outcome.get("outcome")
         self._bonus_unit = (unit_object if isinstance(done, Mapping) and done.get("bonus_action")
@@ -664,6 +666,8 @@ class InfoNavigation:
             or (self._dialogue_pending and not (isinstance(settled, Mapping)
                                                 and settled.get("settled"))))
         self._stale = {p.name for p in self._root.iterdir()} if self._root.is_dir() else set()
+        if outcome.get("phase") == "handover" and outcome.get("reason") == "cursor_budget":
+            self._cursor_spent = True       # M15: the next turn_next hands the turn over
         self._turn.record(unit_object, outcome)
         error = self._write_turn_report()
         return {**outcome, "report_error": error} if error else outcome
@@ -828,6 +832,25 @@ class InfoNavigation:
         self._handover = reason
         return status, reason, self._write_handover(state, reason)
 
+    def _over_cursor_budget(self, state: Mapping[str, object], unit_object: object) -> bool:
+        """Reaching the next unit (plus one map proof) would overrun this turn's cursor budget.
+        An unreadable cursor or unit is left to the act's own checks."""
+        if self._cursor_spent:
+            return True
+        cursor = state.get("cursor")
+        units = state.get("units")
+        if unit_object is None or not isinstance(cursor, Mapping) or not isinstance(units, list):
+            return False
+        unit = next((u for u in units if isinstance(u, Mapping)
+                     and u.get("object") == unit_object), None)
+        if unit is None or not all(type(v) is int for v in (
+                cursor.get("x"), cursor.get("y"), unit.get("tile_x"), unit.get("tile_y"))):
+            return False
+        cost = press_budget.reach_unit((cursor["x"], cursor["y"]),
+                                       (unit["tile_x"], unit["tile_y"]))
+        return not press_budget.fits(cost, used=self._used("_goto_presses"),
+                                     budget=MAX_GOTO_PRESSES)
+
     def _write_handover(self, state: Mapping[str, object], reason: str) -> str | None:
         """handover.json (spec M13); errors are returned, never raised (the lock holds anyway)."""
         try:
@@ -881,6 +904,9 @@ class InfoNavigation:
                 nav._log({"operation": "act_press", "button": button,
                           "monotonic_ns": time.monotonic_ns()})
                 await nav._adapter.press(button, frames)
+
+            def cursor_presses_left(self) -> int:
+                return MAX_GOTO_PRESSES - nav._used("_goto_presses")
 
             async def goto(self, tile: list[int]) -> Mapping[str, object]:
                 assert nav._read_cursor is not None
@@ -993,7 +1019,7 @@ class InfoNavigation:
         x, y = await self._read_cursor()
         needed = abs(target[0] - x) + abs(target[1] - y)
         if self._used("_goto_presses") + needed > MAX_GOTO_PRESSES:
-            raise NavigationRefused("cursor press budget for this trial is exhausted")
+            raise NavigationRefused("cursor press budget for this turn is exhausted")
         presses, stalls, unexpected = 0, 0, False
         while (x, y) != (target[0], target[1]) and presses < MAX_GOTO_STEPS:
             if x != target[0]:
@@ -1190,6 +1216,10 @@ class InfoNavigation:
                 self._turn_state = state
                 chosen = turn.next_unit(state, self._turn)
                 status, reason, handover_error = await self._clear_check(state, chosen["stopped"])
+                if reason is None and self._over_cursor_budget(state, chosen["unit_object"]):
+                    # M15: hand over on the map before a walk the turn's budget cannot finish.
+                    reason = self._handover = "cursor_budget"
+                    handover_error = self._write_handover(state, reason)
                 if reason is not None:
                     chosen = {**chosen, "unit_object": None, "done": False}
                 self._turn_done = bool(chosen["done"]) and chosen["stopped"] is None

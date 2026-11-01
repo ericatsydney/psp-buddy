@@ -79,6 +79,14 @@ def test_out_of_reach_foe_opens_move_range_once_then_moves_and_attacks():
     assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 8)
 
 
+def test_a_move_range_drawn_late_is_still_used_for_the_plan():
+    # Fast reads (1 Nov) can read the state before the game draws the range.
+    sim = Game(range_late=2)
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['ok'] and result['moved'] is True
+
+
 def test_nothing_in_reach_even_with_moves_is_a_handover_with_no_attack():
     sim = Game()
     sim.units[2]['tile_y'] = 30

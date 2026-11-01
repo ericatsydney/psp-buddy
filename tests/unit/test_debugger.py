@@ -134,6 +134,57 @@ def test_observation_preserves_preexisting_user_pause(stepping, paused):
     asyncio.run(scenario())
 
 
+def gap_adapter(transport):
+    """Adapter on a fake clock: sleeps advance the clock and are recorded."""
+    from psp_buddy.debugger import DebuggerAdapter
+
+    adapter = DebuggerAdapter(transport)
+    adapter.now, adapter.slept = 100.0, []
+    adapter._clock = lambda: adapter.now
+
+    async def sleep(seconds):
+        adapter.slept.append(round(seconds, 3))
+        adapter.now += seconds
+    adapter._gap_sleep = sleep
+    return adapter
+
+
+def test_a_pause_right_after_a_press_waits_for_the_press_gap():
+    # fr-s33b (1 Nov): with fast reads a pause came milliseconds after a press, and the
+    # debugger then stopped answering for 60 s.
+    async def scenario():
+        transport = FakeTransport()
+        adapter = gap_adapter(transport)
+        await adapter.press("down", 2)
+        adapter.now += 0.05
+        async with adapter.observation_pause():
+            pass
+        assert adapter.slept == [0.15]
+    asyncio.run(scenario())
+
+
+def test_a_pause_right_after_a_resume_waits_for_the_resume_gap():
+    async def scenario():
+        adapter = gap_adapter(FakeTransport())
+        async with adapter.observation_pause():
+            pass
+        async with adapter.observation_pause():
+            pass
+        assert adapter.slept == [0.1]
+    asyncio.run(scenario())
+
+
+def test_a_pause_long_after_the_last_input_does_not_wait():
+    async def scenario():
+        adapter = gap_adapter(FakeTransport())
+        await adapter.press("down", 2)
+        adapter.now += 5
+        async with adapter.observation_pause():
+            pass
+        assert adapter.slept == []
+    asyncio.run(scenario())
+
+
 def test_observation_exception_resumes_running_game():
     from psp_buddy.debugger import DebuggerAdapter
 

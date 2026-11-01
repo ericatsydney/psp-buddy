@@ -78,6 +78,9 @@ class Spirited(Game):
         return {**answer, 'mech_name': self.flags.get('mech', 'Gundam 00')}
 
     async def command_menu(self):
+        if self.flags.get('menu_unreadable', 0) > 0:     # an implausible read (None)
+            self.flags['menu_unreadable'] -= 1
+            return None
         if self.screen == 'unit_menu':
             return self.entry, len(self.entries)
         return 0, 4                                 # stale after the menu closed (24 Oct dump)
@@ -89,6 +92,13 @@ class Spirited(Game):
         active = sorted(n for n, b in spirits.EFFECT_BITS.items() if self.effects & b == b)
         return {'level': 36, 'sp': self.sp, 'max_sp': 95, 'spirits': rows,
                 'effects': self.effects, 'active': active}
+
+    async def state(self):
+        answer = await super().state()
+        if self.flags.get('screens'):          # the helper's UI-pool screen name (M15)
+            answer['screen'] = {'map': 'no_menu', 'unit_menu': 'unit_commands',
+                                'spirit_list': 'spirit_list'}.get(self.screen, 'unknown')
+        return answer
 
     async def goto(self, tile):
         if self.screen in ('unit_menu', 'pilot_select', 'spirit_list'):     # cursor locked
@@ -286,6 +296,46 @@ def test_an_unknown_menu_layout_closes_the_menu_before_any_entry_is_chosen():
     presses = [e for e in sim.log if not e.startswith('spirits')]
     assert presses[:3] == ['goto(5, 5)', 'circle', 'cross']
     assert result['ok'] and result['phase'] == 'fired' and sim.sp == 55
+
+
+def test_an_unknown_layout_proves_the_map_from_memory_without_a_sideways_walk():
+    # User, 1 Nov: the cursor stepped sideways and back after every closed Command menu.
+    # A Cross from the Command menu cannot start a dialogue, so memory is enough here.
+    sim = Spirited(morph=True, mech='Arios Gundam', screens=True)
+    result = run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000))
+    assert result['spirit']['on_map'] is True
+    presses = [e for e in sim.log if not e.startswith('spirits')]
+    assert presses[:5] == ['goto(5, 5)', 'circle', 'cross', 'goto(5, 5)', 'circle']
+    assert result['ok'] and result['phase'] == 'fired'
+
+
+def test_without_a_screen_reading_the_sideways_walk_still_proves_the_map():
+    sim = Spirited(morph=True, mech='Arios Gundam')
+    run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000))
+    presses = [e for e in sim.log if not e.startswith('spirits')]
+    assert presses[:5] == ['goto(5, 5)', 'circle', 'cross', 'goto(4, 5)', 'goto(5, 5)']
+
+
+def test_a_mech_with_an_unknown_layout_is_not_tried_again_in_the_same_run():
+    skip: set[str] = set()
+    first = Spirited(morph=True, mech='Arios Gundam', screens=True)
+    run(plan_act.plan_and_act(first, SPIRIT_POLICY, 1000, spirit_skip=skip))
+    assert skip == {'Arios Gundam'}
+    again = Spirited(morph=True, mech='Arios Gundam', screens=True)
+    result = run(plan_act.plan_and_act(again, SPIRIT_POLICY, 1000, spirit_skip=skip))
+    spirit = result['spirit']
+    assert spirit['status'] == 'skipped' and spirit['reason'] == 'menu_layout_unknown'
+    assert spirit['cached'] is True
+    presses = [e for e in again.log if not e.startswith('spirits')]
+    assert presses[:2] == ['goto(5, 5)', 'circle'] and 'cross' not in presses
+    assert result['ok'] and result['phase'] == 'fired'
+
+
+def test_an_unreadable_menu_does_not_mark_a_known_mech_as_unknown():
+    skip: set[str] = set()
+    sim = Spirited(screens=True, menu_unreadable=1)
+    result = run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000, spirit_skip=skip))
+    assert result['spirit']['reason'] == 'menu_layout_unknown' and skip == set()
 
 
 def test_a_command_cursor_that_does_not_reach_spirit_closes_the_menu():

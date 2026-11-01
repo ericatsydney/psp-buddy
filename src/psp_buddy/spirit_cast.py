@@ -17,7 +17,9 @@ Every path that opened a menu ends by proving the map from memory (`on_map`): th
 to a neighbouring tile and back, which it cannot do while a menu is open. Two Crosses may leave a
 menu open (24 Oct live, m11live2: a unit whose Spirit opened another screen first stayed on the
 Command menu and locked the cursor for the rest of the turn), so up to two more Crosses follow;
-a menu that still does not close makes the caller stop the turn.
+a menu that still does not close makes the caller stop the turn. When only the Command menu was
+open (no cast), memory proves the map first (no UI window, cursor on the unit; user, 1 Nov) and the
+cursor walk is the fallback; a mech whose layout is unknown is not tried again in the same run.
 """
 
 import struct
@@ -83,8 +85,13 @@ async def _close(io: act.ActIO, presses: int) -> bool:
 
 async def cast_before_attack(io: SpiritIO, unit_object: int, tile: Sequence[int], *,
                              mech_name: str | None = None,
-                             reserve: float = 0.0) -> dict[str, Any]:
-    """Cast the chosen spirit from the map; `reserve` is the time the attack still needs."""
+                             reserve: float = 0.0,
+                             skip_mechs: set[str] | None = None) -> dict[str, Any]:
+    """Cast the chosen spirit from the map; `reserve` is the time the attack still needs.
+    `skip_mechs` (per run) holds mechs whose Command menu layout proved unknown: they are not
+    tried again (user, 1 Nov: each try opened, closed and re-proved the menu for nothing)."""
+    if mech_name and skip_mechs is not None and mech_name in skip_mechs:
+        return _skipped("menu_layout_unknown", mech=mech_name, cached=True)
     if io.time_left() < SPIRIT_NEEDS + reserve:
         return _skipped("no_time")
     try:
@@ -111,7 +118,11 @@ async def cast_before_attack(io: SpiritIO, unit_object: int, tile: Sequence[int]
         menu = await io.command_menu()
         target = None if menu is None or menu[0] != 0 else spirit_row(menu[1], mech_name)
         if target is None:
-            on_map = await _back_to_map(io, tile, depth)
+            on_map = await _back_to_map(io, tile, depth, memory_first=True)
+            # Only a plausible read on row 0 shows the layout itself is unknown; a failed read
+            # or another row is no reason to skip this mech for the rest of the run.
+            if mech_name and skip_mechs is not None and menu is not None and menu[0] == 0:
+                skip_mechs.add(mech_name)
             return _skipped("menu_layout_unknown", entries=menu and menu[1], on_map=on_map,
                             mech=mech_name, **facts)
         for _ in range(target):
@@ -120,7 +131,7 @@ async def cast_before_attack(io: SpiritIO, unit_object: int, tile: Sequence[int]
         menu = await io.command_menu()
         facts["menu"] = None if menu is None else [menu[0], menu[1]]
         if menu is None or menu[0] != target:
-            on_map = await _back_to_map(io, tile, depth)
+            on_map = await _back_to_map(io, tile, depth, memory_first=True)
             return _skipped("command_row_mismatch", on_map=on_map, **facts)
         await io.press("circle", 2)              # Spirit
         depth = LIST_DEPTH
@@ -167,9 +178,25 @@ async def _on_map(io: act.ActIO, tile: Sequence[int]) -> bool:
     return bool((await io.goto([x, y])).get("reached"))
 
 
-async def _back_to_map(io: act.ActIO, tile: Sequence[int], crosses: int) -> bool:
-    """Cross `crosses` times, then prove the map; up to EXTRA_CROSSES more while it is not."""
+async def _map_in_memory(io: act.ActIO, tile: Sequence[int]) -> bool:
+    """No UI window open (M15 pool) and the cursor still on the unit; False when unsure."""
+    try:
+        state = await io.state()
+    except act.ActIOError:
+        return False
+    cursor = state.get("cursor")
+    return (state.get("screen") == "no_menu" and isinstance(cursor, Mapping)
+            and [cursor.get("x"), cursor.get("y")] == [int(tile[0]), int(tile[1])])
+
+
+async def _back_to_map(io: act.ActIO, tile: Sequence[int], crosses: int, *,
+                       memory_first: bool = False) -> bool:
+    """Cross `crosses` times, then prove the map; up to EXTRA_CROSSES more while it is not.
+    `memory_first`: only the Command menu was open (no cast, no list), so a Cross cannot have
+    started a dialogue and memory proves the map; the cursor walk stays the fallback."""
     await _close(io, crosses)
+    if memory_first and await _map_in_memory(io, tile):
+        return True
     for extra in range(EXTRA_CROSSES + 1):
         try:
             if await _on_map(io, tile):

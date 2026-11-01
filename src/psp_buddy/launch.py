@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -146,11 +147,16 @@ class PreparedLaunch:
 
 
 _SESSION_ISSUERS: dict[object, tuple[PreparedLaunch, Process, Inspector]] = {}
+# The PowerShell identity query takes about 0.85 s and assert_bound runs before every pause,
+# resume and press (about 2,500 times a run, m15s33b). The Popen handle we hold keeps the PID from
+# being reused, so between full checks the handle and file checks are enough (user, 1 Nov).
+FULL_CHECK_SECONDS = 30.0
 
 
 class LaunchSession:
     def __init__(self, prepared: PreparedLaunch, process: Process, inspector: Inspector,
-                 *, _issuer: object | None = None) -> None:
+                 *, _issuer: object | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         issued = _SESSION_ISSUERS.pop(_issuer, None)
         if issued is None or any(a is not b for a, b in zip(
                 issued, (prepared, process, inspector), strict=True)):
@@ -167,17 +173,23 @@ class LaunchSession:
         self.endpoint = self.config.debugger_endpoint
         self.pid = process.pid
         self.game_version = Path(prepared.arguments[3].split("=", 1)[1]).stem.split("_")[1]
+        self._clock = clock
         self._identity = inspector.process(self.pid)
-        self.assert_bound()
+        self._identity_checked = clock()
+        self.assert_bound(full=True)
 
-    def assert_bound(self) -> None:
+    def assert_bound(self, *, full: bool = False) -> None:
+        """Handle and file checks every call; the process identity at most every 30 s."""
         if self._closed or self._process.poll() is not None:
             raise ValueError("owned emulator process is not running")
-        identity = self._inspector.process(self.pid)
-        expected_line = subprocess.list2cmdline(list(self._prepared.arguments))
-        if (identity != self._identity or identity.executable.resolve() != self.executable.resolve()
-                or identity.command_line != expected_line):
-            raise ValueError("launched process identity or command line mismatch")
+        if full or self._clock() - self._identity_checked >= FULL_CHECK_SECONDS:
+            identity = self._inspector.process(self.pid)
+            expected_line = subprocess.list2cmdline(list(self._prepared.arguments))
+            if (identity != self._identity
+                    or identity.executable.resolve() != self.executable.resolve()
+                    or identity.command_line != expected_line):
+                raise ValueError("launched process identity or command line mismatch")
+            self._identity_checked = self._clock()
         _safe_path(self.memstick_root)
         if (self.executable.parent / "installed.txt").exists():
             raise ValueError("memory stick override appeared")
@@ -185,7 +197,7 @@ class LaunchSession:
     def claim_connection(self) -> str:
         if self._claimed:
             raise ValueError("launch connection already claimed")
-        self.assert_bound()
+        self.assert_bound(full=True)
         port = urlsplit(self.endpoint).port
         assert port is not None
         listeners = self._inspector.listeners(port)
@@ -217,7 +229,7 @@ class LaunchSession:
         if self._closed:
             return
         if self._process.poll() is None:
-            self.assert_bound()
+            self.assert_bound(full=True)
             self._process.terminate()
             try:
                 self._process.wait(timeout=5)
@@ -229,10 +241,12 @@ class LaunchSession:
 class Launcher:
     def __init__(self, *, gate: BackupGate | None = None,
                  process_factory: Callable[..., Process] = subprocess.Popen,
-                 inspector: Inspector | None = None) -> None:
+                 inspector: Inspector | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self.gate = gate if gate is not None else BackupGate()
         self.process_factory = process_factory
         self.inspector = inspector if inspector is not None else WindowsInspector()
+        self.clock = clock
         self._issued: dict[int, PreparedLaunch] = {}
 
     def prepare(self, config: RunConfig, *, state_filename: str,
@@ -432,7 +446,8 @@ class Launcher:
         issuer = object()
         _SESSION_ISSUERS[issuer] = (prepared, process, self.inspector)
         try:
-            return LaunchSession(prepared, process, self.inspector, _issuer=issuer)
+            return LaunchSession(prepared, process, self.inspector, _issuer=issuer,
+                                 clock=self.clock)
         except Exception:
             _SESSION_ISSUERS.pop(issuer, None)
             # The Popen handle belongs to this start call, even when inspection fails.

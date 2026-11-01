@@ -10,8 +10,9 @@ import binascii
 import ipaddress
 import json
 import math
+import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Protocol
 
@@ -111,6 +112,11 @@ def _validate(event: str, params: Mapping[str, object]) -> None:
 
 
 class DebuggerAdapter:
+    # fr-s33b (1 Nov): once reads were fast, a pause milliseconds after a press left the debugger
+    # silent for 60 s; before, the PowerShell identity check kept them >= ~0.5 s apart.
+    PRESS_GAP_SECONDS = 0.2
+    RESUME_GAP_SECONDS = 0.1
+
     def __init__(self, transport: Transport, *, timeout_seconds: float = 10) -> None:
         if (isinstance(timeout_seconds, bool) or not math.isfinite(timeout_seconds)
                 or timeout_seconds <= 0):
@@ -127,6 +133,9 @@ class DebuggerAdapter:
         self._control_ticket: str | None = None
         self._pause_owner: asyncio.Task[object] | None = None
         self._assert_bound: Callable[[], None] | None = None
+        self._clock: Callable[[], float] = time.monotonic
+        self._gap_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        self._quiet_until = 0.0         # no new pause before this clock time
 
     @classmethod
     async def connect_live(cls, session: object) -> "DebuggerAdapter":
@@ -372,6 +381,8 @@ class DebuggerAdapter:
                 return await self._exchange("input.buttons.press", params)
             finally:
                 await self._release()
+                self._quiet_until = max(self._quiet_until,
+                                        self._clock() + self.PRESS_GAP_SECONDS)
 
     async def _transition(self, event: str, expected_stepping: bool) -> None:
         try:
@@ -400,6 +411,9 @@ class DebuggerAdapter:
             owns_pause = not stepping and not paused
             try:
                 if owns_pause:
+                    wait = self._quiet_until - self._clock()
+                    if wait > 0:
+                        await self._gap_sleep(wait)
                     await self._transition("cpu.stepping", True)
                 self._pause_owner = asyncio.current_task()
                 yield stepping, paused
@@ -410,6 +424,8 @@ class DebuggerAdapter:
                     _, user_paused = await self.status()
                     if not user_paused:
                         await self._transition("cpu.resume", False)
+                        self._quiet_until = max(self._quiet_until,
+                                                self._clock() + self.RESUME_GAP_SECONDS)
 
     async def close(self) -> None:
         try:

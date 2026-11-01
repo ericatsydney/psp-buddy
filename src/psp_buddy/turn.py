@@ -12,7 +12,9 @@ from typing import Any
 
 ALLY_GROUP = 0
 FOE_GROUP = 12
-SKIP_HANDOVERS = ("no_target", "retreat_needed", "unit_not_ready", "unit_not_ally", "protected")
+# cursor_budget (M15): nothing was pressed; the next turn_next hands the whole turn over.
+SKIP_HANDOVERS = ("no_target", "retreat_needed", "unit_not_ready", "unit_not_ally", "protected",
+                  "cursor_budget")
 # act stages before the Move and the Start press: a failure there backs out and changes nothing.
 BEFORE_ACTION_STAGES = ("plan", "select", "attack_menu", "weapon", "target", "forecast")
 

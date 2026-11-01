@@ -17,7 +17,7 @@ from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from . import act, spirit_cast, targets
+from . import act, press_budget, spirit_cast, targets
 from .models import Policy
 from .tactics import BOSS_NAMES, boss_objects, plan_attack
 
@@ -123,7 +123,7 @@ async def _open_move_range(io: act.ActIO, unit_object: int) -> Mapping[str, obje
         await io.sleep(0.8)
         await io.press("circle", 2)
         await io.sleep(0.8)
-        return await io.state()
+        return await act.range_when_drawn(io, [unit["tile_x"], unit["tile_y"]])
     finally:
         await _back_out(io, 2)
 
@@ -155,7 +155,8 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        boss_names: Collection[str] | None = None,
                        mech_names: dict[int, str] | None = None,
                        settle_first: bool = False,
-                       protected: Collection[int] = frozenset()) -> dict[str, Any]:
+                       protected: Collection[int] = frozenset(),
+                       spirit_skip: set[str] | None = None) -> dict[str, Any]:
     """One planned, gated attack for `unit_object`.
 
     A `protected` unit (M12: an ally lost in an earlier attempt) is left alone with no input: it
@@ -187,7 +188,7 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
             bosses = set(bosses) | await _bosses(io, boss_names,
                                                  {} if mech_names is None else mech_names)
         answer = await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log,
-                                     notes)
+                                     notes, spirit_skip)
     except act.ActIOError as exc:
         answer = {"ok": False, "phase": "failed", "stage": "io", "reason": f"io_error: {exc}"}
     except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
@@ -197,7 +198,7 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
 
 
 async def _cast(io: act.ActIO, state: Mapping[str, Any], unit_object: int,
-                mech_name: object) -> dict[str, Any]:
+                mech_name: object, spirit_skip: set[str] | None = None) -> dict[str, Any]:
     """Sense or Focus before the attack; an IO without the spirit reads skips it."""
     if not all(hasattr(io, name) for name in ("spirits", "spirit_cursor_bytes",
                                               "command_menu")):
@@ -207,7 +208,26 @@ async def _cast(io: act.ActIO, state: Mapping[str, Any], unit_object: int,
         return {"status": "skipped", "reason": "unit_not_found"}
     return await spirit_cast.cast_before_attack(
         cast(spirit_cast.SpiritIO, io), unit_object, (unit["tile_x"], unit["tile_y"]),
-        mech_name=mech_name if isinstance(mech_name, str) else None, reserve=REPLAN_NEEDS)
+        mech_name=mech_name if isinstance(mech_name, str) else None, reserve=REPLAN_NEEDS,
+        skip_mechs=spirit_skip)
+
+
+def _over_cursor_budget(io: act.ActIO, state: Mapping[str, Any], instruction: Mapping[str, Any],
+                        *, spirit: bool) -> bool:
+    """M15: the planned walks (unit -> destination -> target) would overrun the turn's cursor
+    budget; an IO without the budget reader, or an unreadable tile, never refuses here."""
+    left = getattr(io, "cursor_presses_left", None)
+    units = {u.get("object"): u for u in state.get("units", []) if isinstance(u, Mapping)}
+    unit = units.get(instruction.get("unit_object"))
+    foe = units.get((instruction.get("attack") or {}).get("target_object"))
+    if left is None or unit is None or foe is None:
+        return False
+    move_to = instruction.get("move_to")
+    cost = press_budget.act_cost(
+        (unit["tile_x"], unit["tile_y"]),
+        destination=(move_to[0], move_to[1]) if move_to else None,
+        target=(foe["tile_x"], foe["tile_y"]), spirit=spirit)
+    return cost > int(left())
 
 
 async def _bosses(io: act.ActIO, names: Collection[str],
@@ -228,10 +248,14 @@ async def _bosses(io: act.ActIO, names: Collection[str],
 
 async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                         bosses: Collection[int], min_hit: int, hits: Mapping[int, int] | None,
-                        damage_log: Path | None, notes: dict[str, Any]) -> dict[str, Any]:
+                        damage_log: Path | None, notes: dict[str, Any],
+                        spirit_skip: set[str] | None = None) -> dict[str, Any]:
     state = await io.state()
     weapons = await io.read_weapons(unit_object)
     excluded: list[int] = []
+    # No Spirit presses are reserved for a mech already known to have no usable layout.
+    tries_spirit = policy.spirit_before_attack and not (
+        spirit_skip is not None and weapons.get("mech_name") in spirit_skip)
     while True:
         plan = plan_attack(state, weapons, policy, unit_object, bosses=bosses, hits=hits,
                            exclude=excluded)
@@ -243,8 +267,13 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                     **({"excluded": excluded} if excluded else {})}
         instruction: dict[str, Any] = plan["act"]       # type: ignore[assignment]
         moved = bool(instruction.get("move_to"))
+        if _over_cursor_budget(io, state, instruction,
+                               spirit=tries_spirit and "spirit" not in notes):
+            return {"ok": False, "phase": "handover", "reason": "cursor_budget", "plan": plan,
+                    "moved": False}
         if policy.spirit_before_attack and "spirit" not in notes:
-            notes["spirit"] = await _cast(io, state, unit_object, weapons.get("mech_name"))
+            notes["spirit"] = await _cast(io, state, unit_object, weapons.get("mech_name"),
+                                          spirit_skip)
             if notes["spirit"]["status"] == "mismatch":
                 return {"ok": False, "phase": "failed", "stage": "spirit",
                         "reason": "spirit_mismatch", "plan": plan, "moved": False}

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import itertools
 import subprocess
 from pathlib import Path
 
@@ -61,8 +62,11 @@ def owned(config_values, tmp_path):
             Path(args[0]), subprocess.list2cmdline(args), 'created')
         return process
 
+    # Each bound check is a periodic full identity check here (the clock jumps 30 s per read),
+    # so an identity change is caught at the very next capture step.
+    ticks = itertools.count(step=30.0)
     launcher = Launcher(gate=BackupGate(guard=Closed()), process_factory=factory,
-                        inspector=inspector)
+                        inspector=inspector, clock=lambda: next(ticks))
     prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst', system_root=system)
     session = launcher.start(prepared)
     return session, inspector

@@ -39,8 +39,10 @@ class FakeProcess:
 class FakeInspector:
     identity = ProcessIdentity(Path('unused'), '', 'created')
     ports: tuple[tuple[str, int], ...] = ()
+    calls = 0
 
     def process(self, pid: int) -> ProcessIdentity:
+        self.calls += 1
         return self.identity
 
     def listeners(self, port: int) -> tuple[tuple[str, int], ...]:
@@ -70,8 +72,75 @@ def prepared_env(config_values: dict[str, object], tmp_path: Path):
         return process
 
     launcher = Launcher(gate=BackupGate(guard=Closed()), process_factory=factory,
-                        inspector=inspector)
+                        inspector=inspector, clock=CLOCK)
+    CLOCK.now = 1000.0
     return launcher, config, system, inspector, process
+
+
+class FakeClock:
+    now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+CLOCK = FakeClock()
+
+
+def started(prepared_env):
+    launcher, config, system, inspector, process = prepared_env
+    session = launcher.start(launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                                              system_root=system))
+    inspector.calls = 0
+    return session, config, inspector, process
+
+
+def test_identity_is_rechecked_at_most_every_30_seconds(prepared_env):
+    session, _, inspector, _ = started(prepared_env)
+    session.assert_bound()
+    CLOCK.now += 29
+    session.assert_bound()
+    assert inspector.calls == 0
+    CLOCK.now += 1
+    session.assert_bound()
+    assert inspector.calls == 1
+    session.assert_bound()
+    assert inspector.calls == 1
+
+
+def test_a_changed_identity_fails_at_the_periodic_check(prepared_env):
+    session, _, inspector, _ = started(prepared_env)
+    identity = inspector.identity
+    inspector.identity = ProcessIdentity(identity.executable, identity.command_line, 'reused')
+    session.assert_bound()                     # within 30 s: the handle check only
+    CLOCK.now += 30
+    with pytest.raises(ValueError, match='identity'):
+        session.assert_bound()
+
+
+def test_an_exited_process_fails_at_once_without_inspection(prepared_env):
+    session, _, inspector, process = started(prepared_env)
+    process.stopped = True
+    with pytest.raises(ValueError, match='not running'):
+        session.assert_bound()
+    assert inspector.calls == 0
+
+
+def test_an_override_file_fails_at_once(prepared_env):
+    session, _, inspector, _ = started(prepared_env)
+    (session.executable.parent / 'installed.txt').write_text('x')
+    with pytest.raises(ValueError, match='override'):
+        session.assert_bound()
+    assert inspector.calls == 0
+
+
+def test_claim_and_close_always_check_identity(prepared_env):
+    session, _, inspector, process = started(prepared_env)
+    inspector.ports = (('127.0.0.1', process.pid),)
+    session.claim_connection()
+    assert inspector.calls == 1
+    session.close()
+    assert inspector.calls == 2
 
 
 def test_isolated_configuration_and_one_use_claim(prepared_env):
