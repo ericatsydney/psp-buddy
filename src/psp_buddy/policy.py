@@ -13,11 +13,18 @@ CLAUSES = (
     (r"strongest boss weapons above (\d+)%", "strongest_boss_above_percent"),
     (r"common types have more than (\d+) instances", "common_type_min_count"),
     (r"retry at most (\d+) times", "max_retries"),
+    (r"evade when the foe hit rate is above (\d+)%", "evade_above_hit_percent"),     # M16
+    (r"end moves within reach of at most (\d+) foes", "max_foes_in_reach"),          # M16
+    (r"strongest weapons above (\d+)%", "strongest_above_percent"),                  # M16 m16-i
+    (r"defend when the foe hit rate is at least (\d+)%", "defend_at_hit_percent"),   # M16 m16-i
 )
 FLAG_CLAUSES = {
     "target non-bosses before bosses": "non_boss_first",
     "use sense then focus before attacking": "spirit_before_attack",     # M11 wording
     "use spirits before attacking": "spirit_before_attack",
+    "hold units without focus or sense on turn 1": "hold_unspirited_turn_one",     # M16
+    "advance toward foes when none is in reach": "advance_when_no_target",         # M16
+    "move damaged units away from foes": "retreat_damaged",                        # M16 m16-i
 }
 FIXED_CLAUSES = (
     "stop on map clear", "prefer repair then trust then retreat",
@@ -64,5 +71,11 @@ def parse_policy(text: str) -> Policy:
             "strongest_boss_above_percent", defaults.strongest_boss_above_percent),
         common_type_min_count=settings.get("common_type_min_count", defaults.common_type_min_count),
         max_retries=settings.get("max_retries", defaults.max_retries),
+        evade_above_hit_percent=settings.get(
+            "evade_above_hit_percent", defaults.evade_above_hit_percent),
+        max_foes_in_reach=settings.get("max_foes_in_reach", defaults.max_foes_in_reach),
+        strongest_above_percent=settings.get(
+            "strongest_above_percent", defaults.strongest_above_percent),
+        defend_at_hit_percent=settings.get("defend_at_hit_percent", defaults.defend_at_hit_percent),
         **flags,
     )

@@ -190,6 +190,13 @@ class Policy:
     stop_on_map_clear: bool = True
     non_boss_first: bool = False
     spirit_before_attack: bool = False
+    hold_unspirited_turn_one: bool = False      # M16 (user, 3 Nov)
+    advance_when_no_target: bool = False        # M16 (user, 3 Nov)
+    evade_above_hit_percent: int | None = None  # M16: enemy phase, Eva. above this foe hit
+    max_foes_in_reach: int | None = None        # M16: a move may end within reach of N foes
+    strongest_above_percent: int | None = None  # M16 (m16-i): strongest weapon above this foe HP
+    retreat_damaged: bool = False               # M16 (m16-i): damaged units attack safely/retreat
+    defend_at_hit_percent: int | None = None    # M16 (m16-i): enemy phase, Def. at this foe hit
 
     def __post_init__(self) -> None:
         if type(self.max_retries) is not int or not 0 <= self.max_retries <= 3:

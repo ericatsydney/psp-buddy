@@ -298,6 +298,18 @@ def test_plan_act_accepts_boss_names_and_keeps_foe_names_for_the_trial(owned, tm
                                         if u['raw_menu_group_byte'] == 12}
 
 
+def test_plan_act_accepts_a_policy_text_up_to_800_characters(owned, tmp_path):
+    # m16-j (3 Nov): the runner's policy grew to 402 characters and the 400 limit refused it.
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    text = ('cheap weapons below 20%; ' * 32)[:800]
+    answer = asyncio.run(service.execute('plan_act', frame(sequence=1, policy=text, **request())))
+    assert answer['ok'] is True
+    with pytest.raises(NavigationRefused):
+        asyncio.run(service.execute('plan_act', frame(sequence=2, policy=text + ';',
+                                                      **request())))
+
+
 def test_plan_act_leaves_a_protected_unit_alone(owned, tmp_path):
     sim = plan_sim()
     service, adapter, frame = make(owned, tmp_path, sim)
@@ -1151,3 +1163,84 @@ def test_plan_act_fires_when_the_planned_walks_fit(owned, tmp_path):
                              - _cost_of_planned_act(sim, BASE + 1000) - 20)
     answer = asyncio.run(service.execute('plan_act', frame(sequence=1, policy='', **request())))
     assert answer['phase'] == 'fired'
+
+
+def test_enemy_reaction_recon_presses_directions_only_at_a_stopped_window(owned, tmp_path):
+    # M16 recon (user, 3 Nov: evade above 30% hit): find the defender options on the forecast.
+    from test_end_turn import WindowSim
+    sim = WindowSim(screens=3)
+    for u in sim.units:
+        u['object'] += BASE
+        u['counted_as_unmoved'] = False
+    service, adapter, frame = make(owned, tmp_path, sim)
+
+    def reaction(sequence, button='right'):
+        return service.execute('press', frame('enemy_forecast', sequence=sequence, button=button,
+                                              duration=2, purpose='reaction_move'))
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        with pytest.raises(NavigationRefused):        # not stopped at a window yet
+            await reaction(4)
+        stop = await service.execute('enemy_phase', {'sequence': 4, 'stop_at_window': True})
+        assert stop['phase'] == 'window'
+        await reaction(5)
+        await reaction(6, 'down')
+        with pytest.raises(NavigationRefused):        # Circle stays with enemy_phase
+            await reaction(7, 'circle')
+        step = await service.execute('enemy_phase', {'sequence': 7})
+        assert step['phase'] in ('continue', 'done')
+        with pytest.raises(NavigationRefused):        # the window has moved on
+            await reaction(8)
+    asyncio.run(scenario())
+    assert sim.log.count('right') == 1 and sim.log.count('down') == 1
+
+
+def test_enemy_phase_evades_above_the_given_hit_with_the_cursor_reader(owned, tmp_path):
+    # M16 (user, 3 Nov): "in enemy phase, if the foe hit rate more than 30%, choose eva".
+    import json
+
+    from test_end_turn import ReactionSim
+    sim = ReactionSim(hits=(35, 20, 100))
+    for u in sim.units:
+        u['object'] += BASE
+        u['counted_as_unmoved'] = False
+    service, adapter, frame = make(owned, tmp_path, sim, read_reaction_cursors=sim.reaction_cursors)
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('end_turn', frame(sequence=2, phase='open'))
+        await service.execute('end_turn', frame('system_menu', sequence=3, phase='confirm',
+                                                highlighted_entry='EndTurn'))
+        for bad in (-1, 101, '30', True):
+            for key in ('evade_above', 'defend_at'):      # defend_at: M16, m16-i
+                with pytest.raises(NavigationRefused):
+                    await service.execute('enemy_phase', {'sequence': 4, key: bad})
+        sequence, step = 4, {'phase': 'continue'}
+        while step['phase'] == 'continue':
+            step = await service.execute('enemy_phase', {'sequence': sequence, 'evade_above': 30,
+                                                         'defend_at': 100})
+            sequence += 1
+        assert step['phase'] == 'done'
+    asyncio.run(scenario())
+    assert sim.chosen == [0] and sim.defended == [2]
+    report = tmp_path / 'evidence' / 'enemy-phase-report.json'
+    data = json.loads(report.read_text(encoding='utf-8'))
+    assert [r['action'] for r in data['reactions']] == ['evade', 'default', 'defend']
+
+
+def test_the_act_io_reads_the_menu_masks_through_the_helper_reader(owned, tmp_path):
+    from psp_buddy import act as act_macro
+    sim = phase_sim()
+
+    async def masks():
+        return 0x0880000C, 0x06000000
+
+    service, adapter, frame = make(owned, tmp_path, sim, read_menu_masks=masks)
+    assert asyncio.run(service._act_io().menu_masks()) == (0x0880000C, 0x06000000)
+    bare, _, _ = make(owned, tmp_path / 'b', sim)
+    with pytest.raises(act_macro.ActIOError):
+        asyncio.run(bare._act_io().menu_masks())

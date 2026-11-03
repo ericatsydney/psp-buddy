@@ -200,3 +200,26 @@ def test_a_protected_unit_counts_as_skipped_not_a_stop():
     log = TurnLog()
     assert log.record(7, {'ok': False, 'phase': 'handover', 'reason': 'protected'}) == 'skipped'
     assert log.skipped == {7: 'protected'} and log.stopped is None
+
+
+def test_held_turn_one_is_a_skip_and_an_advance_is_a_standby() -> None:
+    log = TurnLog()
+    assert log.record(1, {"ok": False, "phase": "handover", "reason": "held_turn_one"}) == "skipped"
+    assert log.skipped == {1: "held_turn_one"}
+    advanced = {"ok": True, "phase": "advanced", "moved": True, "standby": True,
+                "plan": {"act": {"unit_object": 2, "move_to": [3, 4]}}}
+    assert log.record(2, advanced) == "standby"
+    assert log.entries[-1]["reason"] == "advance" and log.entries[-1]["moved"] is True
+    assert log.record(3, {**advanced, "standby": False}) == "stop"
+    assert log.stopped == "advance_standby_failed"
+
+
+def test_retreat_stay_is_a_skip_and_a_retreat_is_a_standby() -> None:
+    log = TurnLog()
+    assert log.record(1, {"ok": False, "phase": "handover", "reason": "retreat_stay"}) == "skipped"
+    retreat = {"ok": True, "phase": "advanced", "moved": True, "standby": True,
+               "plan": {"act": {"unit_object": 2, "move_to": [3, 4]},
+                        "expect": {"rule": "retreat", "threats": 1, "distance": 6}}}
+    assert log.record(2, retreat) == "standby" and log.entries[-1]["reason"] == "retreat"
+    assert log.record(3, {**retreat, "standby": False}) == "stop"
+    assert log.stopped == "retreat_standby_failed"

@@ -10,6 +10,10 @@ so the damage model of docs/research/2026-10-21-damage-model.md can be fitted la
 policy clause `use sense then focus before attacking`, a unit whose plan has an attack first casts
 Sense or Focus (`spirit_cast`, once, from the map); the result then carries `spirit`, and the
 planned hit no longer gates the forecast because the spirit changes it.
+
+M16 ally safety (3 Nov): with the turn-1 hold or advance clauses the pilot's spirits are read once
+(an unreadable list counts as no Focus/Sense) and the turn comes from the state. A held unit gets
+no input; an advance (a plan with `move_to` and no attack) moves, then Standby, phase `advanced`.
 """
 
 import json
@@ -19,7 +23,8 @@ from typing import Any, cast
 
 from . import act, press_budget, spirit_cast, targets
 from .models import Policy
-from .tactics import BOSS_NAMES, boss_objects, plan_attack
+from .spirits import choose_spirit
+from .tactics import BOSS_NAMES, SAFE_SPIRITS, boss_objects, foe_reach_of, plan_attack, spirited
 
 MIN_HIT = 1
 MAX_REPLANS = 2          # extra plans after the game refuses a weapon (greyed, out of reach)
@@ -58,13 +63,34 @@ async def _standby(io: act.ActIO, unit_object: int) -> bool:
         return False                   # the helper's hard cancel must never hit an open menu
     reader = getattr(io, "post_move_menu", None)
     try:
-        if reader is not None:
+        on_last = False
+        masks = await spirit_cast.menu_masks(io) if reader is not None else None
+        if reader is not None and masks is not None:
+            # M16: the post-move entry bitmask gives Standby's row (a ship lists it first).
             menu = await reader()
-            if menu is None or menu[0] != 0 or menu[1] < 2:
+            if menu is None or menu[0] != 0:
                 return False
-        await io.press("up", 2)
-        await io.sleep(0.3)
-        if reader is not None:
+            target = spirit_cast.entry_row(masks[1], menu[1], spirit_cast.STANDBY_BIT)
+            if target is None:
+                return False
+            for _ in range(target):
+                await io.press("down", 2)
+                await io.sleep(0.3)
+            menu = await reader()
+            if menu is None or menu[0] != target:
+                return False
+            on_last = True              # verified on Standby: Circle without the Up path
+        elif reader is not None:
+            menu = await reader()
+            # M16: a move with no foe in reach may offer Standby alone. Only a one-entry menu is
+            # trusted: a longer one on its last row may be an earlier unit's stale Standby.
+            on_last = menu is not None and menu[1] == 1 and menu[0] == 0
+            if menu is None or not on_last and (menu[0] != 0 or menu[1] < 2):
+                return False
+        if not on_last:
+            await io.press("up", 2)
+            await io.sleep(0.3)
+        if reader is not None and not on_last:
             menu = await reader()
             if menu is None or menu[0] != menu[1] - 1:
                 return False
@@ -156,7 +182,8 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        mech_names: dict[int, str] | None = None,
                        settle_first: bool = False,
                        protected: Collection[int] = frozenset(),
-                       spirit_skip: set[str] | None = None) -> dict[str, Any]:
+                       spirit_skip: set[str] | None = None,
+                       foe_reach: dict[int, int] | None = None) -> dict[str, Any]:
     """One planned, gated attack for `unit_object`.
 
     A `protected` unit (M12: an ally lost in an earlier attempt) is left alone with no input: it
@@ -185,10 +212,13 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
         if boss_names is None and policy.non_boss_first:
             boss_names = BOSS_NAMES
         if boss_names is not None:
-            bosses = set(bosses) | await _bosses(io, boss_names,
-                                                 {} if mech_names is None else mech_names)
+            if mech_names is None:
+                mech_names = {}
+            bosses = set(bosses) | await _bosses(
+                io, boss_names, mech_names,
+                foe_reach if policy.max_foes_in_reach is not None else None)
         answer = await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log,
-                                     notes, spirit_skip)
+                                     notes, spirit_skip, foe_reach, mech_names)
     except act.ActIOError as exc:
         answer = {"ok": False, "phase": "failed", "stage": "io", "reason": f"io_error: {exc}"}
     except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
@@ -212,6 +242,88 @@ async def _cast(io: act.ActIO, state: Mapping[str, Any], unit_object: int,
         skip_mechs=spirit_skip)
 
 
+async def _safety_facts(io: act.ActIO, policy: Policy, state: Mapping[str, Any],
+                        unit_object: int) -> tuple[int | None, Mapping[str, Any] | None]:
+    """(turn, pilot spirit read) for the M16 clauses; the pilot is None when not needed or
+    unreadable."""
+    field = state.get("turn")
+    turn = field.get("turn") if isinstance(field, Mapping) else None
+    turn = turn if type(turn) is int else None
+    # Focus/Sense only matter for the turn-1 hold (an unknown turn counts as turn 1).
+    if not policy.hold_unspirited_turn_one or (turn is not None and turn > 1):
+        return turn, None
+    reader = getattr(io, "spirits", None)
+    try:
+        pilot = await reader(unit_object) if reader is not None else None
+    except act.ActIOError:
+        pilot = None
+    return turn, pilot if isinstance(pilot, Mapping) else None
+
+
+async def _protected(io: act.ActIO, policy: Policy, state: Mapping[str, Any], unit_object: int,
+                     pilot: Mapping[str, Any] | None, mech_name: object, notes: dict[str, Any],
+                     spirit_skip: set[str] | None) -> bool:
+    """M16 turn-1 test. Without the spirit clause a learned Focus/Sense is enough. With it
+    (3 Nov, run m16-a: a skipped Sense let Michel's VF-25G advance into a counter) the pilot counts
+    only with Focus/Sense already active, or once one is cast here, before any move."""
+    if pilot is None or not spirited(pilot):
+        return False
+    if not policy.spirit_before_attack:
+        return True
+    unit: Mapping[str, Any] = next(
+        (u for u in state.get("units", []) if u.get("object") == unit_object), {})
+    hp, max_hp = unit.get("hp"), unit.get("max_hp")
+    if type(hp) is int and type(max_hp) is int and hp * 100 < policy.heal_below_percent * max_hp:
+        return False                    # it hands over `retreat_needed`: no SP spent first
+    if set(pilot.get("active") or ()) & set(SAFE_SPIRITS):
+        return True
+    choice = choose_spirit(pilot)
+    if choice is None or choice["spirit"] not in SAFE_SPIRITS:
+        return False
+    notes["spirit"] = await _cast(io, state, unit_object, mech_name, spirit_skip)
+    return bool(notes["spirit"].get("status") == "cast"
+                and notes["spirit"].get("spirit") in SAFE_SPIRITS)
+
+
+def _cast_stop(cast_result: Mapping[str, Any]) -> str | None:
+    """Why play must stop after a cast attempt, or None."""
+    if cast_result.get("status") == "mismatch":
+        return "spirit_mismatch"
+    if cast_result.get("on_map") is False:          # never act on an unknown screen
+        return "spirit_menus_not_closed"
+    return None
+
+
+async def _advance(io: act.ActIO, state: Mapping[str, Any], plan: Mapping[str, Any],
+                   instruction: Mapping[str, Any]) -> dict[str, Any]:
+    """M16: move toward the foes with no attack, then Standby on the post-move menu."""
+    moved = await act.run_act(instruction, io)
+    if not moved.get("ok"):
+        stages: list[Mapping[str, Any]] = moved.get("stages", [])  # type: ignore[assignment]
+        landed = (any(st.get("stage") == "move" for st in stages)
+                  or _moved_elsewhere(moved, state, instruction["unit_object"]))
+        failed: dict[str, Any] = {"ok": False, "phase": "failed", "plan": plan, "outcome": moved,
+                                  "moved": landed}
+        if landed:
+            failed["standby"] = await _standby(io, instruction["unit_object"])
+        return failed
+    standby = await _standby(io, instruction["unit_object"])
+    return {"ok": True, "phase": "advanced", "plan": plan, "outcome": moved, "moved": True,
+            "standby": standby}
+
+
+def _moved_elsewhere(outcome: Mapping[str, Any], state: Mapping[str, Any],
+                     unit_object: int) -> bool:
+    """An unconfirmed Move that still left the unit on another tile (post-move menu up)."""
+    facts: Mapping[str, Any] = outcome.get("facts") or {}
+    units: list[Mapping[str, Any]] = state.get("units", [])
+    unit: Mapping[str, Any] = next((u for u in units if u.get("object") == unit_object), {})
+    start = [unit.get("tile_x"), unit.get("tile_y")]
+    return (outcome.get("stage") == "move" and outcome.get("reason") == "move_not_confirmed"
+            and facts.get("tile") is not None and None not in start
+            and facts.get("tile") != start)
+
+
 def _over_cursor_budget(io: act.ActIO, state: Mapping[str, Any], instruction: Mapping[str, Any],
                         *, spirit: bool) -> bool:
     """M15: the planned walks (unit -> destination -> target) would overrun the turn's cursor
@@ -219,19 +331,47 @@ def _over_cursor_budget(io: act.ActIO, state: Mapping[str, Any], instruction: Ma
     left = getattr(io, "cursor_presses_left", None)
     units = {u.get("object"): u for u in state.get("units", []) if isinstance(u, Mapping)}
     unit = units.get(instruction.get("unit_object"))
-    foe = units.get((instruction.get("attack") or {}).get("target_object"))
-    if left is None or unit is None or foe is None:
+    attack = instruction.get("attack")
+    foe = units.get((attack or {}).get("target_object"))
+    if left is None or unit is None or (foe is None and attack is not None):
         return False
     move_to = instruction.get("move_to")
     cost = press_budget.act_cost(
         (unit["tile_x"], unit["tile_y"]),
         destination=(move_to[0], move_to[1]) if move_to else None,
-        target=(foe["tile_x"], foe["tile_y"]), spirit=spirit)
+        target=(foe["tile_x"], foe["tile_y"]) if foe is not None else None, spirit=spirit)
     return cost > int(left())
 
 
-async def _bosses(io: act.ActIO, names: Collection[str],
-                  cache: dict[int, str]) -> frozenset[int]:
+async def _read_foe(io: act.ActIO, obj: int, names: dict[int, str] | None,
+                    reach: dict[int, int] | None) -> None:
+    """One weapon read fills both per-trial caches (boss names, M16 reach); a failed read leaves
+    the foe out (`tactics` then treats its reach as every tile)."""
+    try:
+        read = await io.read_weapons(obj)
+    except act.ActIOError:
+        return
+    if names is not None:
+        names[obj] = str(read.get("mech_name", ""))
+    value = foe_reach_of(read)
+    if reach is not None and value is not None:
+        reach[obj] = value
+
+
+async def _foe_reach(io: act.ActIO, state: Mapping[str, Any], cache: dict[int, int] | None,
+                     names: dict[int, str] | None = None) -> dict[int, int]:
+    """Reach of every living foe (M16), read once per trial into `cache`."""
+    cache = {} if cache is None else cache
+    for unit in state.get("units", []):
+        obj = unit.get("object")
+        if (targets.is_foe(unit.get("raw_menu_group_byte")) and type(obj) is int
+                and obj not in cache):
+            await _read_foe(io, obj, names, cache)
+    return cache
+
+
+async def _bosses(io: act.ActIO, names: Collection[str], cache: dict[int, str],
+                  reach: dict[int, int] | None = None) -> frozenset[int]:
     """Named or high-max-HP foes; a foe whose name cannot be read counts by max HP only."""
     state = await io.state()
     units: list[Mapping[str, Any]] = state.get("units", [])     # type: ignore[assignment]
@@ -239,47 +379,74 @@ async def _bosses(io: act.ActIO, names: Collection[str],
         obj = unit.get("object")
         if (targets.is_foe(unit.get("raw_menu_group_byte")) and type(obj) is int
                 and obj not in cache):
-            try:
-                cache[obj] = str((await io.read_weapons(obj)).get("mech_name", ""))
-            except act.ActIOError:
-                continue
+            await _read_foe(io, obj, cache, reach)
     return boss_objects(units, cache, names)
 
 
 async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                         bosses: Collection[int], min_hit: int, hits: Mapping[int, int] | None,
                         damage_log: Path | None, notes: dict[str, Any],
-                        spirit_skip: set[str] | None = None) -> dict[str, Any]:
+                        spirit_skip: set[str] | None = None,
+                        foe_reach: dict[int, int] | None = None,
+                        mech_names: dict[int, str] | None = None) -> dict[str, Any]:
     state = await io.state()
     weapons = await io.read_weapons(unit_object)
+    reach = (await _foe_reach(io, state, foe_reach, mech_names)
+             if policy.max_foes_in_reach is not None or policy.retreat_damaged else None)
     excluded: list[int] = []
+    turn, pilot = await _safety_facts(io, policy, state, unit_object)
+    is_spirited = await _protected(io, policy, state, unit_object, pilot,
+                                   weapons.get("mech_name"), notes, spirit_skip)
+    if "spirit" in notes:
+        stop = _cast_stop(notes["spirit"])
+        if stop is not None:
+            return {"ok": False, "phase": "failed", "stage": "spirit", "reason": stop,
+                    "moved": False}
     # No Spirit presses are reserved for a mech already known to have no usable layout.
     tries_spirit = policy.spirit_before_attack and not (
         spirit_skip is not None and weapons.get("mech_name") in spirit_skip)
     while True:
         plan = plan_attack(state, weapons, policy, unit_object, bosses=bosses, hits=hits,
-                           exclude=excluded)
+                           exclude=excluded, turn=turn, spirited=is_spirited, foe_reach=reach)
         if plan.get("reason") == "no_target" and io.time_left() >= OVERLAY_NEEDS:
             plan = plan_attack(await _open_move_range(io, unit_object), weapons, policy,
-                               unit_object, bosses=bosses, hits=hits, exclude=excluded)
+                               unit_object, bosses=bosses, hits=hits, exclude=excluded,
+                               turn=turn, spirited=is_spirited, foe_reach=reach)
+        # M16 (m16-i): a damaged unit casts Focus/Sense before it moves away or stays; a retreat
+        # move is checked against the cursor budget first, so a refusal presses nothing.
+        planned = plan.get("expect")
+        retreat = plan.get("reason") == "retreat_stay" or (
+            isinstance(planned, Mapping) and planned.get("rule") == "retreat")
+        casts = retreat and policy.spirit_before_attack and "spirit" not in notes
+        if casts and "act" in plan and _over_cursor_budget(
+                io, state, plan["act"], spirit=tries_spirit):    # type: ignore[arg-type]
+            return {"ok": False, "phase": "handover", "reason": "cursor_budget", "plan": plan,
+                    "moved": False}
+        if casts:
+            notes["spirit"] = await _cast(io, state, unit_object, weapons.get("mech_name"),
+                                          spirit_skip)
+            stop = _cast_stop(notes["spirit"])
+            if stop is not None:
+                return {"ok": False, "phase": "failed", "stage": "spirit", "reason": stop,
+                        "plan": plan, "moved": False}
         if "handover" in plan:
             return {"ok": False, "phase": "handover", "reason": plan["reason"],
                     **({"excluded": excluded} if excluded else {})}
         instruction: dict[str, Any] = plan["act"]       # type: ignore[assignment]
         moved = bool(instruction.get("move_to"))
-        if _over_cursor_budget(io, state, instruction,
-                               spirit=tries_spirit and "spirit" not in notes):
+        if _over_cursor_budget(io, state, instruction, spirit=(
+                tries_spirit and "spirit" not in notes and "attack" in instruction)):
             return {"ok": False, "phase": "handover", "reason": "cursor_budget", "plan": plan,
                     "moved": False}
+        if "attack" not in instruction:
+            return await _advance(io, state, plan, instruction)
         if policy.spirit_before_attack and "spirit" not in notes:
             notes["spirit"] = await _cast(io, state, unit_object, weapons.get("mech_name"),
                                           spirit_skip)
-            if notes["spirit"]["status"] == "mismatch":
-                return {"ok": False, "phase": "failed", "stage": "spirit",
-                        "reason": "spirit_mismatch", "plan": plan, "moved": False}
-            if notes["spirit"].get("on_map") is False:     # never act on an unknown screen
-                return {"ok": False, "phase": "failed", "stage": "spirit",
-                        "reason": "spirit_menus_not_closed", "plan": plan, "moved": False}
+            stop = _cast_stop(notes["spirit"])
+            if stop is not None:
+                return {"ok": False, "phase": "failed", "stage": "spirit", "reason": stop,
+                        "plan": plan, "moved": False}
         first = await act.run_act(instruction, io, commit=False)
         failed_at = first.get("stage")
         # The game can refuse a weapon the data allows (22 Oct live: greyed, no enemy in reach).
@@ -299,14 +466,7 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
         stages: list[Mapping[str, Any]] = first.get("stages", [])  # type: ignore[assignment]
         # A Move that landed on another tile also leaves the post-move menu up (31 Oct live,
         # m14s33h); `_standby` presses only once its own menu read shows that menu.
-        facts: Mapping[str, Any] = first.get("facts") or {}   # type: ignore[assignment]
-        units: list[Mapping[str, Any]] = state.get("units", [])  # type: ignore[assignment]
-        unit: Mapping[str, Any] = next(
-            (u for u in units if u.get("object") == unit_object), {})
-        start = [unit.get("tile_x"), unit.get("tile_y")]
-        elsewhere = (failed_at == "move" and first.get("reason") == "move_not_confirmed"
-                     and facts.get("tile") is not None and None not in start
-                     and facts.get("tile") != start)
+        elsewhere = _moved_elsewhere(first, state, unit_object)
         if ((moved and failed_at in REPLAN_STAGES
              and any(s.get("stage") == "move" for s in stages)) or elsewhere):
             failed["standby"] = await _standby(io, unit_object)

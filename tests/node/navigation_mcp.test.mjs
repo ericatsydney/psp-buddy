@@ -55,12 +55,15 @@ test('SDK exposes only bounded navigation tools and rejects unsafe arguments', a
  for (const bad of [{phase:'x'},{context:'info'},{highlighted_entry:'Save'},{button:'circle'},{phase:'confirm'},{sequence:0}]) await assert.rejects(client.callTool({name:'ppsspp_end_turn',arguments:{...et,...bad}}));
  await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2}});assert.equal(calls.at(-1)[0],'enemy_phase');
  await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2,accept_losses:true}});assert.equal(calls.at(-1)[0],'enemy_phase');
- for (const bad of [{},{sequence:0},{sequence:2,screen_file:'x.png'},{sequence:2,accept_losses:'yes'}]) await assert.rejects(client.callTool({name:'ppsspp_enemy_phase',arguments:bad}));
+ await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2,stop_at_window:true}});assert.equal(calls.at(-1)[0],'enemy_phase');
+ await client.callTool({name:'ppsspp_enemy_phase',arguments:{sequence:2,evade_above:30,defend_at:100}});assert.equal(calls.at(-1)[0],'enemy_phase');
+ for (const bad of [{},{sequence:0},{sequence:2,screen_file:'x.png'},{sequence:2,accept_losses:'yes'},{sequence:2,stop_at_window:1},{sequence:2,evade_above:101},{sequence:2,evade_above:'30'},{sequence:2,defend_at:101},{sequence:2,defend_at:'100'}]) await assert.rejects(client.callTool({name:'ppsspp_enemy_phase',arguments:bad}));
  const pa={sequence:1,screen_file:'frame.png',screen_sha256:'a'.repeat(64),context:'map',unit_object:149303288,policy:'cheap weapons below 20%',bosses:[149302976]};
  await client.callTool({name:'ppsspp_plan_act',arguments:pa});assert.equal(calls.at(-1)[0],'plan_act');
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,min_hit:40}});
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,boss_names:['Mercurius','Vayeate']}});
  await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,protected:[149303600]}});
- for (const bad of [{unit_object:5},{policy:5},{policy:'x'.repeat(401)},{bosses:[1]},{bosses:'x'},{context:'attack_forecast'},{move_to:[1,2]},{commit:true},{min_hit:0},{min_hit:101},{min_hit:'5'},{boss_names:'Mercurius'},{boss_names:['']},{boss_names:['x'.repeat(33)]},{protected:[1]},{protected:'x'}]) await assert.rejects(client.callTool({name:'ppsspp_plan_act',arguments:{...pa,...bad}}));
+ await client.callTool({name:'ppsspp_plan_act',arguments:{...pa,policy:'x'.repeat(800)}});  // m16-j: the runner policy is 402 chars
+ for (const bad of [{unit_object:5},{policy:5},{policy:'x'.repeat(801)},{bosses:[1]},{bosses:'x'},{context:'attack_forecast'},{move_to:[1,2]},{commit:true},{min_hit:0},{min_hit:101},{min_hit:'5'},{boss_names:'Mercurius'},{boss_names:['']},{boss_names:['x'.repeat(33)]},{protected:[1]},{protected:'x'}]) await assert.rejects(client.callTool({name:'ppsspp_plan_act',arguments:{...pa,...bad}}));
  } finally {await client.close();await server.close();}
 });

@@ -1,6 +1,6 @@
 # Project progress
 
-Updated 31 October 2026 (Australia/Brisbane).
+Updated 3 November 2026 (Australia/Brisbane).
 Ticks mean ready in the scope stated; unchecked items may have partial implementation.
 
 ## 1. Long-term goal
@@ -361,11 +361,118 @@ Checks now: pytest 1628 / 1 skipped, helper 195, node 8, ruff, strict mypy. Unco
   fixes: pytest 1682/1 skipped, ruff, strict mypy, node 8, helper 196, tool tests 45. Committed at the
   user's request (local/ tools stay ignored, as before).
 
-Next step: when the user names the re-saved slot (animations off), `prepare.py --slot N --name
-m15-s33-noanim` and run it; then P6 (other saves). Still open: Task 10 checks + code review of the M15 diff (user: later);
-`run.py` should name an emulator crash (`emulator_exited`) instead of `state_unreadable`; P6 needs other
-saves (slots 0 and 1 refuse with `unknown` openings).
-Uncommitted: this file, the M15 and faster-reads specs and plans, all M15 code.
+- [x] 1 Nov, animations off: the user's new save "slot 3" is PPSSPP file `_2` (UI slots count from 1).
+  It is a different map from stage 33 (24x32, turn 1, all 23 allies unmoved, 32 foes in group 12, boss
+  Hyaku Shiki 33000); the old stage-33 state survives in `local/checkpoints/m15-s33` and the backups.
+  `prepare.py --slot 2 --name m15-s33-noanim` (opening `no_menu`). Run na-a refused before launch:
+  originals changed 8/54, all from the user's own play at 21:12-21:16 (S006 save, SYSTEM.BIN, slot `_2`
+  state + undo); new reference backup `userplay1101-original-20261101T111952Z` 54/54. **na-b**: 16.5 min
+  total; player phase ~8.3 min, 11 attacks (incl. one Hit&Away) + 14 `no_target` (foes out of reach on
+  turn 1); enemy phase ~1.7 min for 32 foes with animations off; then handover `ally_destroyed`: Lockon
+  (GN-SR2 unit, 4800 HP) moved forward to attack and was shot down in the enemy phase (Arios also fell to
+  943 HP from a counter). Screenshots median 0.71 s; backup 54/54, originals 0/54 changed. The game is
+  left on the trial copy at Lockon's defeat line.
+  Finding: on a turn-1 map where the foes start far away, advancing every unit that can reach a foe puts
+  fragile units inside a 32-foe swarm. Needs a design decision (e.g. hold position/wait for the enemy on
+  open maps, or skip attacks that end a low-HP unit inside many foes' reach) before more runs here.
+  The fixed 8 s `ANIMATION_SECONDS` wait (src/psp_buddy/act.py:25) can now be measured for a shorter value.
+
+- [x] 3 Nov, M16 ally safety (user's rules, design approved; offline only):
+  [spec](superpowers/specs/2026-11-03-ally-safety-advance-design.md),
+  [plan](superpowers/plans/2026-11-03-ally-safety-advance.md). Two opt-in policy clauses:
+  `hold units without focus or sense on turn 1` (on game turn 1 a pilot who has not learned Focus or
+  Sense attacks only from its own tile, else stays unmoved: skip `held_turn_one`) and
+  `advance toward foes when none is in reach` (a unit with no foe reachable moves to the reachable
+  free tile nearest the nearest foe, then Standby: outcome `standby`, reason `advance`). Units that can
+  attack attack as before. Added to `local/m13-tools/clear_loop.py` POLICY (ignored file). Code review
+  (high): 6 findings, 5 fixed test-first (stale post-move menu row not trusted, failed advance still
+  ends in Standby, turn field type check, spirits read only when the hold can apply, tests); left:
+  the advance uses Manhattan distance (terrain ignored, accepted in the spec). Checks: pytest 1708 / 1
+  skipped, helper + tool tests 232, node 8, ruff, strict mypy. Not run live. Unverified live: whether
+  the post-move menu after a move with no foe in reach lists Attack (Standby handles both cases).
+
+- [x] 3 Nov live (all backups 54/54 verified, originals 0/54 changed). **m16-a** (stopped by the user mid
+  turn 1): Michel's VF-25G had Sense learned but its 5-entry Command menu was unchecked, so the cast was
+  skipped (`menu_layout_unknown`); it still counted as spirited, advanced, attacked and took a counter
+  (4700 -> 1310). User: "Both fixes". (1) Turn-1 test now needs Focus/Sense active or cast (tried before
+  any move when `use spirits before attacking` is on; a unit that will retreat casts nothing). (2) Recon
+  m16-rec-michel/-alto/-arios (screenshot per press, view only): VF-25G and VF-25F with no foe in reach
+  Move/Land/Morph/Spirit/Info, Arios with a foe in reach Move/Attack/Land/Spirit/Info: Spirit row 3 of 5,
+  added per mech (`SPIRIT_ROW_BY_MECH` is now mech -> {entries: row}); other counts (e.g. a VF-25 with
+  Attack, 6 entries) stay unchecked. Checks: pytest 1715 / 1 skipped, helper + tools 232, node 8, ruff,
+  strict mypy. **m16-b** (14 min): turn 1, 8 attacks + 2 advances, 14 `held_turn_one`, Sense cast 9 times
+  (all confirmed); 5 more pilots held because their menus are unchecked (Z-like counts on other mechs).
+  Enemy phase: **Garrod (149303184, 5400 HP) destroyed** after advancing with Sense and attacking;
+  149303704 5800 -> 4335. Sense's evade covers one attack, not a swarm. Handover `ally_destroyed`, game
+  left on the trial copy at Garrod's defeat line. Needs a user decision on how far spirited pilots may go.
+
+- [x] 3 Nov (user: "check all the different type of menu and make sure sense can be cast; in enemy phase,
+  if the foe hit rate more than 30%, choose eva"). All live steps on trial copies, every backup 54/54
+  verified, originals 0/54 changed.
+  - Helper: `menu_recon` declaration (view-only Command menus of any baseline ally, Spirit list browsing,
+    close any time); `enemy_phase` `stop_at_window` and `reaction_move` presses for recon; node validator
+    updated. Recon m16-rec-menus (screenshot per press): Z Gundam 4 = Move/Morph/Spirit/Info, VF-19 Kai 6 =
+    Move/Sing/Land/Morph/Spirit/Info, Altron and Deathscythe Hell 3 = Move/Spirit/Info, Wing Zero 5 =
+    Move/Land/Morph/Spirit/Info; the 00 Raiser has two pilots: Spirit opens SELECT-PILOT (UI window
+    0x08E4D090, Setsuna first) before the list (0x08E4D208) -- the m16-b `cast_not_confirmed`; now one
+    Circle picks the first pilot.
+  - Menu rows from memory: each menu slot has a u32 entry bitmask 8 bytes before its count, entries in rising
+    bit order (Move 2, Attack 3, Morph 14, Spirit 23, Standby 25, Retrieve 26, Info 27), checked on every
+    retained dump with a known menu (Gundam 00, Z Gundam, a ship whose Spirit is not above Info, post-move
+    menus). Spirit and post-move Standby rows now come from it (the per-mech table is the fallback). Found
+    after m16-c turn 2: ten mechs had 5-7-entry menus with Attack, and a ship's post-move menu is
+    Standby / Retrieve (Standby first) -> `advance_standby_failed`.
+  - Evade: recon m16-rec-enemy: each enemy attack shows forecast window 0x08E4C81C (Start / Anim / Support
+    greyed / Move, cursor u32 0x08E4C898, Move = 3); Move opens SELECT-ACTION 0x08E4CD80 (Atk./Def./Eva.,
+    cursor 0x08E4CDB8, Eva. = 2); the hover hit read gives the foe's hit and halves after Eva. (35 -> 17).
+    Clause `evade when the foe hit rate is above 30%`; `enemy_phase evade_above` walks, verifies and
+    reports each reaction (`reactions` in enemy-phase-report.json).
+  - Checks: pytest 1736 / 1 skipped, helper + tools 232, node 8, ruff, strict mypy.
+  - **m16-c** (25 min): turn 1: 15 Sense/Focus casts, 9 attacks, 4 advances, 8 held; enemy phase 14 Evades,
+    all confirmed by the halved hit; **no ally lost**; turn 2 stopped at the ship's Standby (fixed above).
+  - **m16-d** (16 min, bitmask rows): turn 1: 16 casts, none skipped; enemy phase 13 Evades confirmed; still
+    **Michel's VF-25G destroyed** (several foes hit it at 33-42% after Evade). Same turn-1 play as m16-c;
+    the difference is the dice.
+
+- [x] 3 Nov, user "Limit foes in reach": clause `end moves within reach of at most N foes` (runner: 2).
+  No move (attack or advance) ends on a tile that more than N living foes can reach next enemy phase
+  (foe move + longest weapon usable after moving, or longest range, Manhattan, terrain ignored; a foe whose
+  reach is unread counts everywhere); attacking from the own tile is never limited. Foe reach is read once
+  per trial with the boss-name read (one weapon read per foe). Code review (high) of the whole round:
+  5 findings, 2 fixed test-first (duplicate foe reads; a bitmask miss no longer puts a mech on the per-run
+  spirit skip list), 3 accepted (stale post-move mask is caught by the Standby poll; unknown reach blocks
+  moves; reach ignores terrain/stationary foes). Checks: pytest 1745 / 1 skipped, helper + tools 232,
+  node 8, ruff, strict mypy.
+  - m16-e: helper TimeoutError after unit 3 (a read hung after Basara's cast; game fine on the map);
+    retried as **m16-f**: turn 1 = 1 attack, 8 advances, 8 held, 15 casts; enemy phase: 2 Evades,
+    **no ally damaged or destroyed**; turn 2: 8 attacks, 7 casts, then stopped on an emulator
+    status error ("normal running status required before observation"). The driver also crashed twice
+    on three screenshot misses in a row (resumed with `local/m16-tools/resume.py`; capture retries now
+    6 with longer waits). Backups 54/54, originals 0/54 changed. Game left on the trial copy (turn 2 map).
+  - m16-g and m16-h (3 Nov, re-run): both stopped before launch on the helper's backup gate ("stale
+    backup receipt": the receipt must be revalidated within 60 s, `backup.BackupGate.freshness_seconds`;
+    re-hashing the 395 MB snapshot took longer with the disk busy, likely Defender scanning new backups;
+    earlier runs spawned 14 s after `prepared.json`). No game input; backups 54/54, originals 0/54
+    changed; PPSSPP closed. Gate left unchanged.
+  - **m16-i** (retry after a quiet disk): ran to turn 3; an ally damaged in turn 2 was skipped
+    `retreat_needed` and destroyed in the turn-3 enemy phase; Eva. never lowered a 100% hit.
+  - User rules after m16-i (3 Nov, approved): strongest weapon on any foe above 10% HP (cheap below
+    10%); damaged units cast Focus/Sense, then attack only from a tile at most 2 foes reach, else move
+    to the safest tile and Standby (or stay: `retreat_stay`); Def. at a 100% foe hit. Spec amendment
+    "run m16-i". Review: 3 fixes (budget before cast, safest attack over all foes, reach read for the
+    retreat clause). m16-j stopped at once: policy text 402 > 400 chars; limit now 800.
+    Checks: pytest 1767 / 1 skipped, helper + tools 232, node 8, ruff, strict mypy.
+  - **m16-k**: turns 1-3 and three enemy phases with **no ally lost**; 3 retreats; Def. chosen on
+    all three 100% hits, Eva. on the rest. Stopped in turn 4 after Lockon's attack: an extra "Get
+    Result" page (Allelujah/Arios, likely a support) was read as a stale post-attack Move menu
+    (`act.py` `post_attack_move_not_closed`). Game left on that result page (trial copy). Backups
+    54/54, originals 0/54 changed.
+
+User, 4 Nov: happy with the M16 result; the m16-k turn-4 stop is acceptable as a handover (no fix).
+Next step: a live test from a new save state the user will provide (back up first; wait for a quiet
+disk so the 60 s backup gate passes); then shorten the post-Start wait; then P6 (other saves).
+Still open: Task 10 checks (user: later).
+Committed 4 Nov (M16 code, spec, plan, this file); recon changes stay in ignored local/ tools.
 
 ## Session goal history — 20 October
 

@@ -375,3 +375,177 @@ def test_a_scene_at_the_start_of_the_new_turn_stops_for_the_agent():
     result = run(end_turn.advance(sim, phase))       # never Circled: turn 8 is up
     assert result['phase'] == 'stopped' and result['reason'] == 'scene_at_new_turn'
     assert result['presses'] == 2
+
+
+class WindowSim(EnemyPhaseSim):
+    """Each enemy screen is a forecast window ('unknown' in the UI pool); directions are logged."""
+
+    async def state(self):
+        answer = await super().state()
+        answer['screen'] = 'unknown' if self.screen == 'enemy' else 'no_menu'
+        answer['ui_windows'] = [1] if self.screen == 'enemy' else []
+        return answer
+
+    async def press(self, button, frames=2):
+        if self.screen == 'enemy' and button in ('up', 'down', 'left', 'right'):
+            self.log.append(button)
+            return
+        await super().press(button, frames)
+
+
+def test_a_recon_stop_halts_at_the_next_window_after_a_press():
+    # M16 recon (3 Nov): stop at an enemy-attack forecast to look at it before any choice.
+    sim = WindowSim(screens=3)
+    phase = ended(sim)
+    first = run(end_turn.advance(sim, phase, stop_at_window=True))
+    assert first['phase'] == 'window' and first['screen'] == 'unknown'
+    assert sim.log.count('circle') == 4 and sim.screens == 2      # one enemy Circle so far
+    again = run(end_turn.advance(sim, phase, stop_at_window=True))
+    assert again['phase'] == 'window' and sim.screens == 1
+    done = run(end_turn.advance(sim, phase))
+    assert done['phase'] == 'done'
+
+
+# ---- M16 Evade (user, 3 Nov: "if the foe hit rate more than 30%, choose eva") ------------------
+# Recon m16-rec-enemy: each enemy attack shows forecast window 0x08E4C81C, menu Start / Anim /
+# Support (greyed, skipped) / Move with its cursor u32 at 0x08E4C898 (0 Start, 3 Move); Move opens
+# SELECT-ACTION (window 0x08E4CD80) Atk. / Def. / Eva. with its cursor at 0x08E4CDB8; Eva. halves
+# the hit (35 -> 17) and the cursor returns to Start.
+
+class ReactionSim(EnemyPhaseSim):
+    def __init__(self, hits=(35, 20, 56), **flags):
+        super().__init__(screens=len(hits), **flags)
+        self.hits, self.row, self.action, self.menu = list(hits), 0, 0, 'forecast'
+        self.chosen, self.defended = [], []
+
+    def current(self):
+        return len(self.hits) - self.screens
+
+    async def state(self):
+        answer = await super().state()
+        windows = []
+        if self.screen == 'enemy':
+            windows = [end_turn.FORECAST_WINDOW]
+            if self.menu == 'action':
+                windows.append(end_turn.ACTION_WINDOW)
+        answer['ui_windows'] = [0x08E4BD0C, *windows]
+        answer['screen'] = 'unknown' if windows else 'no_menu'
+        return answer
+
+    async def hit(self):
+        if self.screen != 'enemy':
+            return {'state': 'unknown', 'hit': None}
+        hit = self.hits[self.current()]
+        if self.flags.get('evade_ignored'):
+            return {'state': 'hit', 'hit': hit}
+        return {'state': 'hit', 'hit': hit // 2 if self.current() in self.chosen else hit}
+
+    async def reaction_cursors(self):
+        return self.row, self.action
+
+    async def press(self, button, frames=2):
+        if self.screen == 'enemy' and button in ('up', 'down', 'cross') or (
+                self.screen == 'enemy' and self.menu == 'action'):
+            self.log.append(button)
+            step = {'down': 1, 'up': -1}.get(button, 0)
+            if self.menu == 'forecast':
+                rows = [0, 1, 3] if not self.flags.get('support') else [0, 1, 2, 3]
+                if self.flags.get('stuck'):
+                    return
+                self.row = rows[(rows.index(self.row) + step) % len(rows)]
+            elif button == 'circle':
+                if self.action == 2:
+                    self.chosen.append(self.current())
+                if self.action == 1:
+                    self.defended.append(self.current())
+                self.menu, self.row = 'forecast', 0
+            elif button == 'cross':
+                self.menu = 'forecast'
+            else:
+                self.action = max(0, min(2, self.action + step))
+            return
+        if self.screen == 'enemy' and button == 'circle' and self.row == 3:
+            self.log.append(button)
+            self.menu, self.action = 'action', 0
+            return
+        if self.screen == 'enemy' and button == 'circle':
+            assert self.row == 0, 'Start must be highlighted'
+        await super().press(button, frames)
+
+
+def test_evade_is_chosen_only_above_the_hit_limit_and_confirmed_by_the_lower_hit():
+    sim = ReactionSim(hits=(35, 20, 56))
+    phase = ended(sim)
+    result = run(end_turn.advance(sim, phase, evade_above=30))
+    assert result['phase'] == 'done' and sim.chosen == [0, 2]
+    assert [r['action'] for r in phase.reactions] == ['evade', 'default', 'evade']
+    assert phase.reactions[0] == {'hit': [35, 17], 'action': 'evade', 'confirmed': True}
+    assert end_turn.report(phase)['reactions'] == phase.reactions
+
+
+def test_a_support_entry_takes_one_more_down():
+    sim = ReactionSim(hits=(80,), support=True)
+    phase = ended(sim)
+    assert run(end_turn.advance(sim, phase, evade_above=30))['phase'] == 'done'
+    assert sim.chosen == [0] and phase.reactions[0]['confirmed'] is True
+
+
+def test_without_a_limit_or_a_cursor_reader_the_default_start_is_taken():
+    sim = ReactionSim(hits=(80,))
+    phase = ended(sim)
+    run(end_turn.advance(sim, phase))
+    assert sim.chosen == [] and 'down' not in sim.log
+
+    class Blind(ReactionSim):
+        reaction_cursors = None
+
+    sim = Blind(hits=(80,))
+    phase = ended(sim)
+    run(end_turn.advance(sim, phase, evade_above=30))
+    assert sim.chosen == [] and phase.reactions[0]['action'] == 'skipped'
+
+
+def test_a_cursor_that_does_not_reach_move_stays_on_start_and_takes_the_default():
+    sim = ReactionSim(hits=(80,), stuck=True)
+    phase = ended(sim)
+    assert run(end_turn.advance(sim, phase, evade_above=30))['phase'] == 'done'
+    assert phase.reactions[0]['action'] == 'skipped' and sim.chosen == []
+
+
+def test_an_action_menu_that_does_not_open_stops_the_phase_without_start():
+    class NoMenu(ReactionSim):
+        async def press(self, button, frames=2):
+            await super().press(button, frames)
+            if self.menu == 'action':
+                self.menu = 'forecast'           # the Circle on Move did nothing visible
+
+    sim = NoMenu(hits=(80,))
+    phase = ended(sim)
+    result = run(end_turn.advance(sim, phase, evade_above=30))
+    assert result['phase'] == 'stopped' and result['reason'] == 'reaction_failed'
+    assert phase.reactions[0]['reason'] == 'action_menu_not_open' and sim.screens == 1
+
+
+def test_an_evade_the_hit_does_not_confirm_is_reported_but_play_goes_on():
+    sim = ReactionSim(hits=(80,), evade_ignored=True)
+    phase = ended(sim)
+    assert run(end_turn.advance(sim, phase, evade_above=30))['phase'] == 'done'
+    assert phase.reactions[0] == {'hit': [80, 80], 'action': 'evade', 'confirmed': False}
+
+
+def test_a_certain_hit_gets_defend_and_lower_hits_still_get_evade():
+    # m16-i (3 Nov): Eva. left a 100% hit at 100%; user: at 100% choose Def., not Eva.
+    sim = ReactionSim(hits=(100, 56, 20))
+    phase = ended(sim)
+    result = run(end_turn.advance(sim, phase, evade_above=30, defend_at=100))
+    assert result['phase'] == 'done' and sim.defended == [0] and sim.chosen == [1]
+    assert [r['action'] for r in phase.reactions] == ['defend', 'evade', 'default']
+    assert phase.reactions[0] == {'hit': [100, 100], 'action': 'defend', 'confirmed': True}
+
+
+def test_defend_works_without_an_evade_limit():
+    sim = ReactionSim(hits=(80, 100))
+    phase = ended(sim)
+    assert run(end_turn.advance(sim, phase, defend_at=100))['phase'] == 'done'
+    assert [r['action'] for r in phase.reactions] == ['default', 'defend']
+    assert sim.defended == [1] and sim.chosen == []

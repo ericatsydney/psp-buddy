@@ -339,3 +339,265 @@ def test_boss_objects_count_group_13_foes() -> None:
     foes = [unit(1, 0, 0, 13, 6000, 6000), unit(2, 0, 1, 13, 7500, 7500),
             unit(3, 0, 2, 13, 30000, 30000), unit(4, 0, 3, 5, 90000, 90000)]
     assert boss_objects(foes, {}, []) == {3}
+
+
+# M16 ally safety (3 Nov): turn-1 hold without Focus/Sense; advance when nothing is in reach.
+SAFETY = parse_policy("hold units without focus or sense on turn 1; "
+                      "advance toward foes when none is in reach")
+
+
+def far_state(turn: int = 1, reachable: list[list[int]] | None = None) -> dict[str, Any]:
+    """Foes far to the south (rows 20+), nothing in reach even after moving."""
+    s = state(reachable=reachable)
+    s["turn"] = {"turn": turn}
+    for u in s["units"]:
+        if u["object"] == FAR_FOE:
+            u["tile_x"], u["tile_y"] = 16, 22
+        elif u["object"] == NEAR_FOE:
+            u["tile_x"], u["tile_y"] = 21, 20
+    return s
+
+
+def test_spirited_needs_learned_focus_or_sense() -> None:
+    from psp_buddy.tactics import spirited
+
+    def pilot(*rows: tuple[str | None, bool]) -> dict[str, Any]:
+        return {"spirits": [{"name": n, "learned": learned} for n, learned in rows]}
+
+    assert spirited(pilot(("Focus", True)))
+    assert spirited(pilot(("Alert", True), ("Sense", True)))
+    assert not spirited(pilot(("Alert", True), ("Invincible", True)))
+    assert not spirited(pilot(("Focus", False), ("Sense", False)))
+    assert not spirited(pilot((None, True)))
+    assert not spirited({})
+
+
+def test_unspirited_unit_on_turn_one_is_held_when_nothing_is_in_reach_from_its_tile() -> None:
+    s = far_state(turn=1)
+    assert plan_attack(s, weapons(), SAFETY, DESTINY, turn=1) == {
+        "handover": True, "reason": "held_turn_one"}
+
+
+def test_unspirited_unit_on_turn_one_attacks_without_moving_only() -> None:
+    # The near foe is in reach from (19,5) only after a move: a held unit does not take it.
+    move_only = state(reachable=[[19, 6, 1], [19, 7, 2]])
+    move_only["turn"] = {"turn": 1}
+    for u in move_only["units"]:
+        if u["object"] == NEAR_FOE:
+            u["tile_x"], u["tile_y"] = 19, 9
+        elif u["object"] == FAR_FOE:
+            u["tile_x"], u["tile_y"] = 2, 30
+    only_short = [weapon(0, "Saber", 2000, 1, 2, p=True)]
+    held = plan_attack(move_only, weapons(only_short), SAFETY, DESTINY, turn=1)
+    assert held == {"handover": True, "reason": "held_turn_one"}
+    free = plan_attack(move_only, weapons(only_short), SAFETY, DESTINY, turn=1, spirited=True)
+    assert attack(free)["move_to"] == [19, 7]
+    in_place = plan_attack(state(), weapons(), SAFETY, DESTINY, turn=1)
+    assert "move_to" not in attack(in_place)
+
+
+def test_unreadable_turn_counts_as_turn_one() -> None:
+    assert plan_attack(far_state(), weapons(), SAFETY, DESTINY, turn=None)["reason"] == (
+        "held_turn_one")
+
+
+def test_spirited_unit_advances_to_the_tile_closest_to_the_nearest_foe() -> None:
+    reach = [[19, 4, 1], [19, 6, 1], [20, 5, 1], [19, 7, 2], [20, 6, 2], [20, 7, 3]]
+    result = plan_attack(far_state(turn=1, reachable=reach), weapons(), SAFETY, DESTINY,
+                         turn=1, spirited=True)
+    assert result == {"act": {"unit_object": DESTINY, "move_to": [20, 7]},
+                      "expect": {"rule": "advance", "toward": NEAR_FOE, "distance": 14}}
+
+
+def test_any_unit_advances_from_turn_two() -> None:
+    result = plan_attack(far_state(turn=2), weapons(), SAFETY, DESTINY, turn=2)
+    assert attack(result)["move_to"] == [19, 7] and "attack" not in attack(result)
+
+
+def test_advance_ties_go_to_the_cheaper_tile_then_the_lower_tile() -> None:
+    s = far_state(turn=2, reachable=[[19, 6, 1], [18, 6, 2], [20, 6, 3]])
+    for u in s["units"]:
+        if u["object"] == NEAR_FOE:
+            u["tile_x"], u["tile_y"] = 19, 20      # (19,6) 14, (18,6)/(20,6) 15
+        elif u["object"] == FAR_FOE:
+            u["tile_x"], u["tile_y"] = 30, 30
+    assert attack(plan_attack(s, weapons(), SAFETY, DESTINY, turn=2))["move_to"] == [19, 6]
+    s["reachable"] = [[19, 4, 1], [20, 7, 3], [18, 7, 4]]       # both 14 from (19,20)
+    assert attack(plan_attack(s, weapons(), SAFETY, DESTINY, turn=2))["move_to"] == [20, 7]
+    s["reachable"] = [[19, 4, 1], [20, 7, 3], [18, 7, 3]]
+    assert attack(plan_attack(s, weapons(), SAFETY, DESTINY, turn=2))["move_to"] == [18, 7]
+
+
+def test_advance_skips_occupied_tiles_and_third_force_units() -> None:
+    s = far_state(turn=2, reachable=[[19, 6, 1], [19, 7, 2], [18, 4, 2]])
+    s["units"].append(unit(5, 19, 7, 0, 1000, 1000))
+    # The living third-force unit at (18,4) is nearer than any foe but is not advanced toward.
+    assert attack(plan_attack(s, weapons(), SAFETY, DESTINY, turn=2))["move_to"] == [19, 6]
+
+
+def test_no_advance_when_no_tile_is_closer_or_the_overlay_is_missing() -> None:
+    behind = far_state(turn=2, reachable=[[19, 4, 1], [20, 4, 2]])
+    assert plan_attack(behind, weapons(), SAFETY, DESTINY, turn=2)["reason"] == "no_target"
+    none = far_state(turn=2, reachable=[])
+    assert plan_attack(none, weapons(), SAFETY, DESTINY, turn=2)["reason"] == "no_target"
+
+
+def test_without_the_clauses_nothing_changes() -> None:
+    assert plan_attack(far_state(turn=1), weapons(), POLICY, DESTINY, turn=1)["reason"] == (
+        "no_target")
+    assert plan_attack(far_state(turn=2), weapons(), POLICY, DESTINY, turn=2)["reason"] == (
+        "no_target")
+
+
+# M16 (user, 3 Nov: "Limit foes in reach"): a move may not end where more than N foes can reach the
+# unit next enemy phase (foe move + longest weapon range, Manhattan, terrain ignored).
+LIMITED = parse_policy("end moves within reach of at most 1 foes")
+
+
+def reach_state() -> dict[str, Any]:
+    """Destiny at (10,10), move-range diamond of radius 4; foe A (10,14) damaged, B (12,12)."""
+    units = [unit(DESTINY, 10, 10, 0, 5200, 5200, 230),
+             unit(NEAR_FOE, 10, 14, 12, 5000, 26000, ready=False),
+             unit(FAR_FOE, 12, 12, 12, 24000, 24000, ready=False)]
+    reach = [[10 + dx, 10 + dy, abs(dx) + abs(dy)] for dx in range(-4, 5) for dy in range(-4, 5)
+             if 0 < abs(dx) + abs(dy) <= 4]
+    return {"turn": {"turn": 3}, "units": units, "reachable": reach}
+
+
+SHORT = [weapon(0, "Saber", 2000, 1, 2, p=True)]
+
+
+def test_a_move_skips_tiles_more_foes_can_reach_than_the_limit() -> None:
+    reach = {NEAR_FOE: 2, FAR_FOE: 2}
+    free = plan_attack(reach_state(), weapons(SHORT), POLICY, DESTINY, foe_reach=reach)
+    assert attack(free)["move_to"] == [10, 12]           # nearest attack tile: A and B reach it
+    safe = plan_attack(reach_state(), weapons(SHORT), LIMITED, DESTINY, foe_reach=reach)
+    assert attack(safe)["move_to"] == [10, 13]           # only A reaches it
+
+
+def test_an_unknown_foe_reach_counts_as_reaching_every_tile() -> None:
+    none = parse_policy("end moves within reach of at most 0 foes")
+    result = plan_attack(reach_state(), weapons(SHORT), none, DESTINY,
+                         foe_reach={NEAR_FOE: 0})       # B unknown: it reaches every tile
+    assert result == {"handover": True, "reason": "no_target"}
+
+
+def test_attacking_from_the_own_tile_is_never_limited() -> None:
+    s = reach_state()
+    s["units"][1]["tile_y"] = 11                          # A next to Destiny
+    result = plan_attack(s, weapons(SHORT), LIMITED, DESTINY, foe_reach={NEAR_FOE: 9, FAR_FOE: 9})
+    assert "move_to" not in attack(result)
+
+
+def test_an_advance_stops_where_the_limit_allows() -> None:
+    s = far_state(turn=2, reachable=[[19, 6, 1], [19, 7, 2], [20, 7, 3]])
+    policy = parse_policy("advance toward foes when none is in reach; "
+                          "end moves within reach of at most 0 foes")
+    # NEAR (21,20) reaches 13: (20,7) is 14 away, (19,7) 15: both out of reach; with 14 neither.
+    assert attack(plan_attack(s, weapons(), policy, DESTINY, turn=2,
+                              foe_reach={NEAR_FOE: 13, FAR_FOE: 1}))["move_to"] == [20, 7]
+    assert attack(plan_attack(s, weapons(), policy, DESTINY, turn=2,
+                              foe_reach={NEAR_FOE: 14, FAR_FOE: 1}))["move_to"] == [19, 7]
+    assert plan_attack(s, weapons(), policy, DESTINY, turn=2,
+                       foe_reach={NEAR_FOE: 16, FAR_FOE: 1})["reason"] == "no_target"
+
+
+def test_foe_reach_is_move_plus_the_longest_weapon_a_moved_foe_can_use() -> None:
+    from psp_buddy.tactics import foe_reach_of
+    read = {"move": 5, "weapons": [weapon(0, "Gun", 1, 1, 3, p=True),
+                                   weapon(1, "Cannon", 1, 2, 7, p=False),
+                                   dict(weapon(2, "Map", 1, 1, 9, p=True), flags={"p": True,
+                                                                               "map": True})]}
+    assert foe_reach_of(read) == 8                       # max(5 + 3, 7); MAP weapons ignored
+    assert foe_reach_of({"move": 4, "weapons": []}) == 4
+    assert foe_reach_of({"weapons": []}) is None          # move unreadable: unknown
+
+
+# M16 (m16-i feedback, 3 Nov): strongest weapon above 10% foe HP; damaged units attack safely or
+# move away from the foes.
+STRONG = parse_policy("cheap weapons below 10%; strongest weapons above 10%")
+
+
+def test_strongest_weapon_on_any_foe_above_the_threshold() -> None:
+    result = plan_attack(state(), weapons(), STRONG, DESTINY)       # NEAR at 40%
+    assert attack(result) == {"unit_object": DESTINY, "move_to": [19, 6], "attack": {
+        "weapon": "ArondightSword", "slot": 4, "target_object": NEAR_FOE}}
+    assert result["expect"]["rule"] == "strongest"
+    low = plan_attack(state(near_hp=2000), weapons(), STRONG, DESTINY)   # 7.7%: cheap first
+    assert attack(low)["attack"]["slot"] == 1 and low["expect"]["rule"] == "cheap"
+
+
+def test_strongest_falls_back_to_the_strongest_weapon_that_reaches() -> None:
+    no_move = state(reachable=[])                  # Arondight (range 3) needs a move
+    assert attack(plan_attack(no_move, weapons(), STRONG, DESTINY))["attack"]["slot"] == 3
+
+
+DAMAGED = parse_policy("move damaged units away from foes; "
+                       "end moves within reach of at most 1 foes")
+
+
+def hurt_reach_state(a_tile: tuple[int, int] = (10, 11)) -> dict[str, Any]:
+    s = reach_state()
+    s["units"][0]["hp"] = 3000                     # 57% < heal 70%
+    s["units"][1]["tile_x"], s["units"][1]["tile_y"] = a_tile
+    return s
+
+
+def test_damaged_unit_attacks_from_the_tile_fewest_foes_reach() -> None:
+    reach = {NEAR_FOE: 1, FAR_FOE: 2}
+    healthy = hurt_reach_state()
+    healthy["units"][0]["hp"] = 5200
+    assert "move_to" not in attack(plan_attack(healthy, weapons(SHORT), LIMITED, DESTINY,
+                                               foe_reach=reach))
+    # (10,10) is reached by A; (9,10) is 2 from A and 5 from B: no foe reaches it.
+    result = plan_attack(hurt_reach_state(), weapons(SHORT), DAMAGED, DESTINY, foe_reach=reach)
+    assert attack(result)["move_to"] == [9, 10]
+
+
+def test_damaged_unit_own_tile_is_limited_and_it_retreats_instead() -> None:
+    result = plan_attack(hurt_reach_state(), weapons(SHORT), DAMAGED, DESTINY,
+                         foe_reach={NEAR_FOE: 9, FAR_FOE: 9})
+    # Every tile is reached by both foes: the farthest from the nearest foe (5), then lower tile.
+    assert result == {"act": {"unit_object": DESTINY, "move_to": [6, 10]},
+                      "expect": {"rule": "retreat", "threats": 2, "distance": 5}}
+
+
+def test_damaged_unit_stays_when_no_tile_is_safer() -> None:
+    s = hurt_reach_state(a_tile=(10, 14))
+    s["reachable"] = [[10, 11, 1]]                  # only toward the foes
+    assert plan_attack(s, weapons(SHORT), DAMAGED, DESTINY,
+                       foe_reach={NEAR_FOE: 9, FAR_FOE: 9}) == {
+        "handover": True, "reason": "retreat_stay"}
+
+
+def test_damaged_unit_without_the_overlay_waits_for_it() -> None:
+    s = hurt_reach_state(a_tile=(10, 14))
+    s["reachable"] = []
+    assert plan_attack(s, weapons(SHORT), DAMAGED, DESTINY,
+                       foe_reach={NEAR_FOE: 9, FAR_FOE: 9})["reason"] == "no_target"
+
+
+def test_damaged_unit_without_a_limit_attacks_like_a_healthy_one() -> None:
+    policy = parse_policy("move damaged units away from foes")
+    assert attack(plan_attack(state(hp=3000), weapons(), policy, DESTINY)) == attack(
+        plan_attack(state(), weapons(), POLICY, DESTINY))
+
+
+def test_damaged_unit_retreats_even_on_turn_one_when_held() -> None:
+    policy = parse_policy("hold units without focus or sense on turn 1; "
+                          "move damaged units away from foes")
+    s = far_state(turn=1)
+    s["units"][0]["hp"] = 3000
+    result = plan_attack(s, weapons(), policy, DESTINY, turn=1)
+    assert result["act"] == {"unit_object": DESTINY, "move_to": [19, 4]}
+    assert result["expect"] == {"rule": "retreat", "threats": 2, "distance": 18}
+
+
+def test_damaged_unit_prefers_a_safer_attack_on_a_lower_priority_foe() -> None:
+    # Review 3 Nov: A (most damaged) is attackable only from tiles A reaches; B from a tile no
+    # foe reaches, so the damaged unit attacks B.
+    s = hurt_reach_state(a_tile=(10, 14))
+    result = plan_attack(s, weapons(SHORT), DAMAGED, DESTINY,
+                         foe_reach={NEAR_FOE: 2, FAR_FOE: 0})
+    assert attack(result)["attack"]["target_object"] == FAR_FOE
+    assert attack(result)["move_to"] == [11, 11]

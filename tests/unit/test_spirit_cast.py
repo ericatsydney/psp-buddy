@@ -98,6 +98,11 @@ class Spirited(Game):
         if self.flags.get('screens'):          # the helper's UI-pool screen name (M15)
             answer['screen'] = {'map': 'no_menu', 'unit_menu': 'unit_commands',
                                 'spirit_list': 'spirit_list'}.get(self.screen, 'unknown')
+            # M16 recon (3 Nov, 00 Raiser): pilot select is window 0x08E4D090, the list 0x08E4D208.
+            pilots = [0x08E4D090] if self.flags.get('two_pilots') else []
+            answer['ui_windows'] = [0x08E4BD0C] + {
+                'unit_menu': [0x08E4BDDC], 'pilot_select': [0x08E4BDDC, *pilots],
+                'spirit_list': [0x08E4BDDC, *pilots, 0x08E4D208]}.get(self.screen, [])
         return answer
 
     async def goto(self, tile):
@@ -356,5 +361,99 @@ def test_command_menu_decoding_and_screen_checked_rows():
     assert spirit_cast.decode_command_menu(struct.pack('<II', 0, 0)) is None
     assert spirit_cast.spirit_row(4, 'Gundam 00') == 2
     assert spirit_cast.spirit_row(5, 'Z Gundam') == 3
-    assert spirit_cast.spirit_row(4, 'Z Gundam') is None        # not the checked layout
     assert spirit_cast.spirit_row(5, 'Shenlong Gundam') is None
+
+
+def test_screen_checked_layouts_of_the_m16_recon():
+    # 3 Nov recon (m16-rec-*, a screenshot per press): VF-25G and VF-25F with no foe in reach show
+    # Move / Land / Morph / Spirit / Info; Arios with a foe in reach Move / Attack / Land / Spirit /
+    # Info. Other entry counts of these mechs stay unchecked.
+    from psp_buddy import spirit_cast
+    for mech in ('VF25GMessiahF・TP', 'VF-25F Messiah F/TP', 'AriosGundam'):
+        assert spirit_cast.spirit_row(5, mech) == 3
+        assert spirit_cast.spirit_row(6, mech) is None
+    assert spirit_cast.spirit_row(4, 'AriosGundam') is None
+
+
+def test_a_two_pilot_unit_picks_its_first_pilot_then_casts():
+    # 3 Nov recon m16-rec-menus: the 00 Raiser's Spirit opens SELECT-PILOT (Setsuna first, the
+    # unit's pilot whose SP is read); one Circle opens his list. m16-b skipped it as not confirmed.
+    sim = Spirited(two_pilots=True, screens=True)
+    result = run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000))
+    spirit = result['spirit']
+    assert spirit['status'] == 'cast' and spirit['spirit'] == 'Sense' and spirit['pilot_select']
+    assert sim.sp == 35 and result['phase'] == 'fired'
+    presses = [e for e in sim.log if not e.startswith('spirits')]
+    assert presses[:8] == ['goto(5, 5)', 'circle', 'down', 'down', 'circle', 'circle', 'down',
+                           'circle']
+
+
+def test_screen_checked_layouts_of_the_m16_menu_recon():
+    # 3 Nov recon m16-rec-menus (screenshots, view only), turn-1 start of m15-s33-noanim.
+    from psp_buddy import spirit_cast
+    assert spirit_cast.spirit_row(4, 'Z Gundam') == 2          # Move / Morph / Spirit / Info
+    assert spirit_cast.spirit_row(5, 'Z Gundam') == 3
+    assert spirit_cast.spirit_row(6, 'VF19KaiValkyrieF') == 4   # Move/Sing/Land/Morph/Spirit/Info
+    assert spirit_cast.spirit_row(3, 'AltronGundam') == 1       # Move / Spirit / Info
+    assert spirit_cast.spirit_row(3, 'DeathscytheHell') == 1
+    assert spirit_cast.spirit_row(5, 'WingGundamZero') == 3     # Move/Land/Morph/Spirit/Info
+
+
+# ---- M16: rows from the menu's entry bitmask (u32 at slot +0x2C, 8 bytes before the count) -----
+# Retained dumps (3 Nov check): Gundam 00 Move/Attack/Spirit/Info = bits 2,3,23,27; Z Gundam
+# Move/Attack/Morph/Spirit/Info = 2,3,14,23,27; a ship 2,3,23,26,27 (Spirit not above Info);
+# post-move Attack/?/Standby = 3,5,25 and Standby/Retrieve = 25,26. Entries list in rising bits.
+BITS = {'Move': 2, 'Attack': 3, 'Repair': 5, 'Morph': 14, 'Spirit': 23, 'Standby': 25,
+        'Retrieve': 26, 'Info': 27}
+
+
+def mask(*labels):
+    return sum(1 << BITS[label] for label in labels)
+
+
+def test_entry_rows_come_from_the_bitmask():
+    from psp_buddy import spirit_cast
+    assert spirit_cast.entry_row(0x0880000C, 4, spirit_cast.SPIRIT_BIT) == 2
+    assert spirit_cast.entry_row(0x0880400C, 5, spirit_cast.SPIRIT_BIT) == 3
+    assert spirit_cast.entry_row(0x0C80000C, 5, spirit_cast.SPIRIT_BIT) == 2
+    assert spirit_cast.entry_row(0x06000000, 2, spirit_cast.STANDBY_BIT) == 0
+    assert spirit_cast.entry_row(0x02000028, 3, spirit_cast.STANDBY_BIT) == 2
+    assert spirit_cast.entry_row(0x0880000C, 5, spirit_cast.SPIRIT_BIT) is None   # count differs
+    assert spirit_cast.entry_row(0x0800000C, 3, spirit_cast.SPIRIT_BIT) is None   # no Spirit
+
+
+class Masked(Spirited):
+    async def menu_masks(self):
+        command = mask(*self.entries) if self.screen == 'unit_menu' else 0
+        return command, 0
+
+
+def test_an_unlisted_mech_casts_with_the_row_from_the_bitmask():
+    # m16-c turn 2: ten mechs skipped (menus with Attack, 5-7 entries, not in the table).
+    sim = Masked(mech='Strike Freedom Gundam', morph=True)
+    result = run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000))
+    spirit = result['spirit']
+    assert spirit['status'] == 'cast' and spirit['spirit'] == 'Sense' and spirit['menu'] == [3, 5]
+
+
+def test_a_bitmask_without_spirit_casts_nothing():
+    class NoSpirit(Masked):
+        async def menu_masks(self):
+            return mask('Move', 'Attack', 'Info', 'Morph'), 0
+
+    sim = NoSpirit(mech='Strike Freedom Gundam', morph=True)
+    result = run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000))
+    assert result['spirit']['status'] == 'skipped' and sim.sp == 55
+
+
+def test_a_bitmask_miss_does_not_skip_the_mech_for_the_rest_of_the_run():
+    # Review 3 Nov: with the mask reader the row is worked out per menu, so one odd read must not
+    # put the mech on the per-run skip list (turn 1 would then hold it for good).
+    class NoSpirit(Masked):
+        async def menu_masks(self):
+            return mask('Move', 'Attack', 'Info', 'Morph'), 0
+
+    skip: set[str] = set()
+    sim = NoSpirit(mech='Strike Freedom Gundam', morph=True)
+    run(plan_act.plan_and_act(sim, SPIRIT_POLICY, 1000, spirit_skip=skip))
+    assert skip == set()

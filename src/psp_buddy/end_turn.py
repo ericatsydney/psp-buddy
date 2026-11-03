@@ -8,6 +8,17 @@ Start highlighted, which Circle also takes (the game's default defender choice).
 reads T through the enemy phase and T+1 once the player phase starts; allies then read unmoved.
 Only Circle is pressed after the confirmation, never while turn T+1 is on screen. Every stop is a
 result, never an exception: the helper would disable itself with the game mid-phase.
+
+M16 Evade (user, 3 Nov: above 30% foe hit choose Eva.; recon m16-rec-enemy): each enemy attack
+shows the forecast window FORECAST_WINDOW with Start / Anim / Support (greyed: skipped) / Move, its
+cursor at FORECAST_CURSOR (0 Start, 3 Move). Move opens SELECT-ACTION (ACTION_WINDOW) Atk. / Def. /
+Eva., cursor at ACTION_CURSOR; Eva. halves the hover hit (35 -> 17) and the cursor returns to
+Start. With `evade_above`, a forecast whose hit is above it gets Down to Move, Circle, Down to Eva.,
+Circle, each step read back from memory; a lower hit afterwards confirms it. Directions are pressed
+only on a forecast; a cursor that does not follow is walked back (stop when it cannot be).
+M16 Def. (user, 3 Nov, run m16-i: Eva. left a 100% hit at 100%): with `defend_at`, a hit at or above
+it gets Move > Def. (DEFEND_ROW) instead; Def. does not change the hit, so reaching Def. and the
+forecast coming back on Start confirm it.
 """
 
 import time
@@ -29,6 +40,10 @@ SCENE_PRESSES = 60             # Circles in a row while the map state is unreada
 PHASE_SECONDS = 900.0
 RESET_POLLS = 20               # turn T+1 seen: reads to wait for the allies to reset
 LOSSES = ("ally_destroyed", "unit_lost")   # stops the agent may accept (user decision, 23 Oct)
+FORECAST_WINDOW, ACTION_WINDOW = 0x08E4C81C, 0x08E4CD80      # UI-pool windows (m16-rec-enemy)
+FORECAST_CURSOR, ACTION_CURSOR = 0x08E4C898, 0x08E4CDB8      # u32 menu rows
+MOVE_ROW, DEFEND_ROW, EVADE_ROW = 3, 1, 2
+REACTION_PAUSE = 0.4
 
 
 def _units(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -153,9 +168,11 @@ class Phase:
         self.scene_presses = 0
         self.last: Mapping[str, Any] = start
         self.screens: list[str] = []
+        self.reactions: list[dict[str, Any]] = []   # M16: one per enemy forecast with a limit
+        self.reacted_at = -1                       # presses when the current forecast was handled
 
     def result(self, phase: str, **extra: Any) -> dict[str, Any]:
-        ok = phase in ("done", "continue")
+        ok = phase in ("done", "continue", "window")
         try:
             turn = turn_of(self.last)
             changes = deltas(self.start, self.last)
@@ -247,8 +264,13 @@ async def _new_turn(io: ActIO, phase: Phase, state: Mapping[str, Any]) -> dict[s
     return phase.result("stopped")
 
 
-async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False) -> dict[str, Any]:
+async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False,
+                  stop_at_window: bool = False, evade_above: int | None = None,
+                  defend_at: int | None = None) -> dict[str, Any]:
     """Circle until turn T+1 has started, a stop, or this call's cap (then "continue").
+
+    `stop_at_window` (M16 recon): after this call's first Circle, return phase "window" as soon
+    as the UI pool shows any window on a readable map (an enemy-attack forecast), pressing nothing.
 
     With `accept_losses` a destroyed or lost ally is recorded in `phase.losses` instead of
     stopping, and a phase stopped only by such a loss resumes; nothing else is excused, and an
@@ -290,11 +312,23 @@ async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False) -> di
             phase.scene_run = 0
         if not scene and turn_of(state) == phase.turn0 + 1:
             return await _new_turn(io, phase, state)
+        if (stop_at_window and pressed and not scene
+                and state.get("screen") not in (None, "no_menu")):
+            return phase.result("window", screen=state.get("screen"),
+                                ui_windows=state.get("ui_windows"))
         if phase.presses >= PHASE_PRESSES or phase.clock() - phase.started > PHASE_SECONDS:
             phase.stopped = "phase_budget"
             return phase.result("stopped")
         if pressed >= CALL_PRESSES or io.time_left() < CALL_NEEDS:
             return phase.result("continue")
+        if ((evade_above is not None or defend_at is not None) and not scene
+                and _forecast(state) and phase.reacted_at != phase.presses):
+            phase.reacted_at = phase.presses
+            note = await _react(io, evade_above, defend_at)
+            phase.reactions.append(note)
+            if note["action"] == "failed":
+                phase.stopped = "reaction_failed"
+                return phase.result("stopped")
         try:
             await io.press("circle", 2)
         except ActIOError as exc:
@@ -304,6 +338,80 @@ async def advance(io: ActIO, phase: Phase, *, accept_losses: bool = False) -> di
         phase.presses += 1
         phase.scene_presses += scene
         await io.sleep(ADVANCE_PAUSE)
+
+
+def _forecast(state: Mapping[str, Any]) -> bool:
+    windows = state.get("ui_windows")
+    return (isinstance(windows, list) and FORECAST_WINDOW in windows
+            and ACTION_WINDOW not in windows)
+
+
+async def _rows(io: ActIO) -> tuple[int, int] | None:
+    reader = getattr(io, "reaction_cursors", None)
+    if reader is None:
+        return None
+    try:
+        rows: tuple[int, int] = await reader()
+    except ActIOError:
+        return None
+    return rows
+
+
+async def _walk(io: ActIO, index: int, wanted: int, presses: int) -> bool:
+    """Down (or Up) until the menu row `index` of `reaction_cursors` reads `wanted`."""
+    for _ in range(presses + 1):
+        rows = await _rows(io)
+        if rows is None:
+            return False
+        if rows[index] == wanted:
+            return True
+        await io.press("down" if rows[index] < wanted else "up", 2)
+        await io.sleep(REACTION_PAUSE)
+    return False
+
+
+async def _react(io: ActIO, evade_above: int | None,
+                 defend_at: int | None = None) -> dict[str, Any]:
+    """Def. at or above `defend_at`, else Eva. above `evade_above`; the forecast stays up with Start
+    highlighted."""
+    try:
+        before = await io.hit()
+        hit = before.get("hit")
+        if before.get("state") != "hit" or type(hit) is not int:
+            return {"hit": None, "action": "skipped", "reason": "hit_unreadable"}
+        if defend_at is not None and hit >= defend_at:
+            action, row = "defend", DEFEND_ROW
+        elif evade_above is not None and hit > evade_above:
+            action, row = "evade", EVADE_ROW
+        else:
+            return {"hit": hit, "action": "default"}
+        rows = await _rows(io)
+        if rows is None or rows[0] != 0:
+            return {"hit": hit, "action": "skipped",
+                    "reason": "no_reader" if rows is None else "cursor_not_on_start"}
+        if not await _walk(io, 0, MOVE_ROW, 3):
+            # Walk back to Start; Circle there is the default answer.
+            if await _walk(io, 0, 0, 3):
+                return {"hit": hit, "action": "skipped", "reason": "move_not_reached"}
+            return {"hit": hit, "action": "failed", "reason": "move_not_reached"}
+        await io.press("circle", 2)
+        await io.sleep(REACTION_PAUSE)
+        windows = (await io.state()).get("ui_windows")
+        if not (isinstance(windows, list) and ACTION_WINDOW in windows):
+            return {"hit": hit, "action": "failed", "reason": "action_menu_not_open"}
+        if not await _walk(io, 1, row, 2):
+            return {"hit": hit, "action": "failed", "reason": f"{action}_not_reached"}
+        await io.press("circle", 2)
+        await io.sleep(REACTION_PAUSE)
+        rows = await _rows(io)
+        after = await io.hit()
+        if rows is None or rows[0] != 0 or not _forecast(await io.state()):
+            return {"hit": hit, "action": "failed", "reason": "forecast_not_back"}
+    except ActIOError as exc:
+        return {"hit": None, "action": "failed", "reason": f"io_error: {exc}"}
+    later = after.get("hit")
+    return {"hit": [hit, later], "action": action,
+            "confirmed": action == "defend" or (isinstance(later, int) and later < hit)}
 
 
 def report(phase: Phase) -> dict[str, Any]:
@@ -318,4 +426,5 @@ def report(phase: Phase) -> dict[str, Any]:
             "presses": phase.presses, "scene_presses": phase.scene_presses,
             "calls": phase.calls, "damaged_allies": hurt,
             "destroyed": destroyed, "losses": {str(k): v for k, v in phase.losses.items()},
-            "deltas": answer["deltas"], "screens": list(phase.screens)}
+            "deltas": answer["deltas"], "screens": list(phase.screens),
+            "reactions": list(phase.reactions)}

@@ -4,8 +4,9 @@ from pathlib import Path
 
 from test_act import SimGame
 
-from psp_buddy import plan_act
+from psp_buddy import act, plan_act
 from psp_buddy.models import Policy
+from psp_buddy.policy import parse_policy
 
 POLICY = Policy()
 POWER = {'Vulcan': 1000, 'Grenade': 2000, 'BeamRifle': 3000}
@@ -382,3 +383,379 @@ def test_a_move_not_confirmed_on_the_same_tile_presses_nothing_more():
     result = run(plan_act.plan_and_act(sim, POLICY, 1000))
     assert result['outcome']['reason'] == 'move_not_confirmed' and 'standby' not in result
     assert sim.log[-1] == 'circle'
+
+
+# M16 ally safety (3 Nov): turn-1 hold and advance toward the foes when nothing is in reach.
+SAFETY = parse_policy('hold units without focus or sense on turn 1; '
+                      'advance toward foes when none is in reach')
+
+
+class Turn(PostMove):
+    """A chosen turn number and, optionally, the acting pilot's spirit list."""
+
+    def __init__(self, turn=7, spirits=None, **flags):
+        super().__init__(**flags)
+        self.turn, self.pilot = turn, spirits
+        self.sp, self.active = 50, ()
+
+    async def state(self):
+        answer = await super().state()
+        answer['turn'] = {'turn': self.turn}
+        return answer
+
+    async def spirits(self, unit_object):
+        self.log.append('spirits')
+        if self.pilot is None:
+            raise act.ActIOError('no spirit reader in this trial')
+        return {'sp': self.sp, 'active': list(self.active),
+                'spirits': [{'id': i + 1, 'name': n, 'learned': True, 'cost': 20, 'row': i}
+                            for i, n in enumerate(self.pilot)]}
+
+
+def far(sim):
+    sim.units[2]['tile_y'] = 30          # (5,30); foe 2001 at (12,12) is the nearest
+    return sim
+
+
+def test_a_unit_with_nothing_in_reach_advances_then_waits():
+    sim = far(Turn(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['ok'] is True and result['phase'] == 'advanced'
+    assert result['moved'] is True and result['standby'] is True
+    assert result['plan']['act'] == {'unit_object': 1000, 'move_to': [5, 8]}
+    assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 8)
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.screen == 'map'
+    assert 'start' not in sim.log and sim.log[-2:] == ['up', 'circle']
+
+
+def test_on_turn_one_a_pilot_without_focus_or_sense_is_held_with_no_input():
+    for pilot in (None, ['Alert']):          # unreadable spirits count as none
+        sim = far(Turn(turn=1, spirits=pilot))
+        result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+        assert result == {'ok': False, 'phase': 'handover', 'reason': 'held_turn_one'}
+        assert sim.log == ['spirits'] and sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_on_turn_one_a_pilot_with_sense_advances():
+    sim = far(Turn(turn=1, spirits=['Alert', 'Sense']))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'advanced' and result['standby'] is True
+
+
+def test_on_turn_one_a_held_pilot_still_attacks_from_its_tile():
+    sim = Turn(turn=1)
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'fired' and result['moved'] is False
+
+
+def test_spirits_are_not_read_without_the_safety_clauses():
+    sim = far(Turn(turn=1, spirits=['Focus']))
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))
+    assert result['reason'] == 'no_target' and 'spirits' not in sim.log
+
+
+def test_standby_on_a_post_move_menu_with_only_standby_needs_no_up():
+    sim = far(Turn(turn=2, moved_entries=('Standby',)))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'advanced' and result['standby'] is True
+    assert 'up' not in sim.log and sim.log[-1] == 'circle'
+
+
+def test_an_advance_that_would_overrun_the_cursor_budget_is_handed_over_unpressed():
+    class Tight(Turn):
+        def cursor_presses_left(self):
+            return 5
+
+    sim = far(Tight(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['reason'] == 'cursor_budget' and result['moved'] is False
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_an_advance_that_lands_on_another_tile_still_ends_with_standby():
+    class Slips(Turn):
+        async def press(self, button, frames=2):
+            if self.screen == 'move_range' and button == 'circle':
+                self.cursor = [self.cursor[0], self.cursor[1] - 1]
+            await super().press(button, frames)
+
+    sim = far(Slips(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'failed' and result['outcome']['reason'] == 'move_not_confirmed'
+    assert result['moved'] is True and result['standby'] is True
+    assert sim.units[0]['counted_as_unmoved'] is False and sim.screen == 'map'
+
+
+def test_an_advance_whose_standby_is_not_confirmed_is_reported():
+    class Stuck(Turn):
+        async def post_move_menu(self):
+            return (0, len(self.entries)) if self.screen == 'unit_menu' else None
+
+    sim = far(Stuck(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'advanced' and result['standby'] is False
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_a_stale_last_row_on_a_two_entry_menu_is_not_trusted():
+    class Stale(Turn):
+        async def post_move_menu(self):
+            return (1, 2) if self.screen == 'unit_menu' else None    # an earlier unit's Standby
+
+    sim = far(Stale(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['standby'] is False
+    assert sim.log[-2:] == ['goto(5, 8)', 'circle'] and 'up' not in sim.log   # only the Move
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_spirits_are_read_only_when_the_turn_one_hold_can_apply():
+    sim = far(Turn(turn=2, spirits=['Focus']))
+    run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert 'spirits' not in sim.log
+    advance_only = parse_policy('advance toward foes when none is in reach')
+    sim = far(Turn(turn=1, spirits=['Focus']))
+    run(plan_act.plan_and_act(sim, advance_only, 1000))
+    assert 'spirits' not in sim.log
+
+
+def test_an_unreadable_turn_field_counts_as_turn_one():
+    class Odd(Turn):
+        async def state(self):
+            answer = await super().state()
+            answer['turn'] = 3
+            return answer
+
+    sim = far(Odd())
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['reason'] == 'held_turn_one'
+
+
+def test_an_advance_that_fails_before_the_move_reports_no_move():
+    class NoSelect(Turn):           # the overlay opens, then selecting the unit fails
+        async def goto(self, tile):
+            if self.screen == 'map' and list(tile) == [5, 5] and 'circle' in self.log:
+                return {'reached': False, 'cursor': {'x': 0, 'y': 0}}
+            return await super().goto(tile)
+
+    sim = far(NoSelect(turn=2))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'failed' and result['moved'] is False and 'standby' not in result
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+# M16 fix (user, 3 Nov, run m16-a): Michel's VF-25G had Sense learned, but its Command menu is
+# not screen-checked, so the cast was skipped and it advanced into a counter (4700 -> 1310 HP).
+CASTING = parse_policy('use spirits before attacking; hold units without focus or sense on turn 1; '
+                       'advance toward foes when none is in reach')
+
+
+def casting(monkeypatch, answer):
+    calls = []
+
+    async def fake_cast(io, state, unit_object, mech_name, spirit_skip=None):
+        calls.append(unit_object)
+        return answer
+
+    monkeypatch.setattr(plan_act, '_cast', fake_cast)
+    return calls
+
+
+def test_on_turn_one_sense_counts_only_once_it_is_cast(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Sense', 'on_map': True})
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    result = run(plan_act.plan_and_act(sim, CASTING, 1000))
+    assert result['phase'] == 'advanced' and result['spirit']['status'] == 'cast'
+    assert calls == [1000]
+
+
+def test_on_turn_one_a_sense_pilot_whose_cast_is_skipped_is_held(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'skipped', 'reason': 'menu_layout_unknown',
+                                  'on_map': True})
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    result = run(plan_act.plan_and_act(sim, CASTING, 1000))
+    assert result['reason'] == 'held_turn_one' and calls == [1000]
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_a_skipped_cast_on_turn_one_still_allows_an_attack_from_the_tile(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'skipped', 'reason': 'menu_layout_unknown',
+                                  'on_map': True})
+    sim = Turn(turn=1, spirits=['Sense'])
+    result = run(plan_act.plan_and_act(sim, CASTING, 1000))
+    assert result['phase'] == 'fired' and result['moved'] is False and calls == [1000]
+
+
+def test_an_active_sense_needs_no_cast_and_unaffordable_sense_holds(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Focus', 'on_map': True})
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    sim.active = ('Sense',)
+    assert run(plan_act.plan_and_act(sim, CASTING, 1000))['phase'] == 'advanced'
+    assert calls == []
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    sim.sp = 5
+    assert run(plan_act.plan_and_act(sim, CASTING, 1000))['reason'] == 'held_turn_one'
+    assert calls == []
+
+
+def test_a_cast_that_left_a_menu_open_stops(monkeypatch):
+    casting(monkeypatch, {'status': 'skipped', 'reason': 'x', 'on_map': False})
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    result = run(plan_act.plan_and_act(sim, CASTING, 1000))
+    assert result['phase'] == 'failed' and result['reason'] == 'spirit_menus_not_closed'
+
+
+def test_no_turn_one_cast_for_a_unit_that_will_retreat(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Sense', 'on_map': True})
+    sim = far(Turn(turn=1, spirits=['Sense']))
+    sim.units[0]['hp'], sim.units[0]['max_hp'] = 1000, 5000
+    result = run(plan_act.plan_and_act(sim, CASTING, 1000))
+    assert result['reason'] == 'retreat_needed' and calls == []
+
+
+def test_standby_first_on_a_post_move_menu_is_found_from_the_bitmask():
+    # m16-c turn 2: a ship's post-move menu was Standby / Retrieve (cursor on Retrieve after Up);
+    # the old "one Up from Attack" rule could not reach Standby. Bits: Standby 25, Retrieve 26.
+    class Ship(Turn):
+        async def menu_masks(self):
+            bits = {'Attack': 3, 'Repair': 5, 'Standby': 25, 'Retrieve': 26}
+            moved = (self.screen == 'unit_menu' and self.acting is not None
+                     and self.acting.get('moved'))
+            return 0, (sum(1 << bits[e] for e in self.entries) if moved else 0)
+
+    sim = far(Ship(turn=2, moved_entries=('Standby', 'Retrieve')))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['phase'] == 'advanced' and result['standby'] is True
+    assert 'up' not in sim.log and sim.log[-1] == 'circle'
+    sim = far(Ship(turn=2, moved_entries=('Attack', 'Repair', 'Standby')))
+    result = run(plan_act.plan_and_act(sim, SAFETY, 1000))
+    assert result['standby'] is True and sim.log[-3:] == ['down', 'down', 'circle']
+
+
+def test_foe_reach_is_read_once_per_trial_and_limits_the_move():
+    # M16 (user, 3 Nov: limit foes in reach). Foes reach 4 (move 2 + Vulcan 2): every tile from
+    # which a moved BeamRifle (2~4) reaches foe 2000 at (5,12) is within its reach, so no move.
+    class Reads(Game):
+        foe_reads = 0
+
+        async def read_weapons(self, unit_object):
+            answer = await super().read_weapons(unit_object)
+            if unit_object in (2000, 2001):
+                self.foe_reads += 1
+                return {**answer, 'move': 2, 'weapons': [dict(w) for w in self.weapons[:1]],
+                        'mech_name': 'Zaku'}
+            return answer
+
+    policy = parse_policy('end moves within reach of at most 0 foes')
+    sim = Reads()
+    sim.units[2]['tile_y'] = 12
+    cache: dict[int, int] = {}
+    result = run(plan_act.plan_and_act(sim, policy, 1000, foe_reach=cache))
+    assert cache == {2000: 4, 2001: 4} and sim.foe_reads == 2
+    assert result['phase'] == 'handover' and result['reason'] == 'no_target'
+    run(plan_act.plan_and_act(sim, policy, 1001, foe_reach=cache))
+    assert sim.foe_reads == 2                          # cached for the rest of the trial
+
+
+def test_boss_names_and_foe_reach_share_one_weapon_read_per_foe():
+    # Review 3 Nov: boss detection and the reach limit each read every foe's weapons.
+    class Reads(Game):
+        foe_reads = 0
+
+        async def read_weapons(self, unit_object):
+            answer = await super().read_weapons(unit_object)
+            if unit_object in (2000, 2001):
+                self.foe_reads += 1
+                return {**answer, 'move': 2, 'mech_name': 'Zaku'}
+            return answer
+
+    policy = parse_policy('target non-bosses before bosses; '
+                          'end moves within reach of at most 2 foes')
+    sim = Reads()
+    names: dict[int, str] = {}
+    reach: dict[int, int] = {}
+    run(plan_act.plan_and_act(sim, policy, 1000, mech_names=names, foe_reach=reach))
+    assert sim.foe_reads == 2 and set(names) == set(reach) == {2000, 2001}
+
+
+# M16 (m16-i, 3 Nov): a damaged unit casts Focus/Sense, then attacks safely or moves away.
+RETREAT = parse_policy('use spirits before attacking; move damaged units away from foes')
+
+
+def hurt(sim):
+    sim.units[0]['hp'], sim.units[0]['max_hp'] = 1000, 5000
+    return sim
+
+
+def test_a_damaged_unit_casts_then_moves_away_and_waits(monkeypatch):
+    calls, seen = [], []
+
+    async def fake_cast(io, state, unit_object, mech_name, spirit_skip=None):
+        calls.append(unit_object)
+        seen.append(list(io.log))
+        return {'status': 'cast', 'spirit': 'Sense', 'on_map': True}
+
+    monkeypatch.setattr(plan_act, '_cast', fake_cast)
+    sim = hurt(far(Turn(turn=2)))
+    result = run(plan_act.plan_and_act(sim, RETREAT, 1000))
+    assert result['phase'] == 'advanced' and result['standby'] is True
+    assert result['plan']['expect']['rule'] == 'retreat' and calls == [1000]
+    assert not any(step.startswith('goto') for step in seen[0][1:])    # cast before the move
+    assert result['spirit']['status'] == 'cast'
+
+
+def test_a_damaged_unit_with_no_safer_tile_casts_and_stays(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Focus', 'on_map': True})
+    monkeypatch.setattr(plan_act, 'plan_attack',
+                        lambda *a, **k: {'handover': True, 'reason': 'retreat_stay'})
+    sim = hurt(Turn(turn=2))
+    result = run(plan_act.plan_and_act(sim, RETREAT, 1000))
+    assert result['reason'] == 'retreat_stay' and calls == [1000]
+    assert result['spirit']['spirit'] == 'Focus'
+
+
+def test_a_damaged_unit_whose_cast_leaves_a_menu_open_stops(monkeypatch):
+    casting(monkeypatch, {'status': 'skipped', 'reason': 'x', 'on_map': False})
+    sim = hurt(far(Turn(turn=2)))
+    result = run(plan_act.plan_and_act(sim, RETREAT, 1000))
+    assert result['phase'] == 'failed' and result['reason'] == 'spirit_menus_not_closed'
+    assert sim.units[0]['counted_as_unmoved'] is True
+
+
+def test_a_retreat_without_the_spirit_clause_casts_nothing(monkeypatch):
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Sense', 'on_map': True})
+    sim = hurt(far(Turn(turn=2)))
+    result = run(plan_act.plan_and_act(sim, parse_policy('move damaged units away from foes'),
+                                       1000))
+    assert result['phase'] == 'advanced' and calls == []
+
+
+def test_a_retreat_over_the_cursor_budget_casts_nothing(monkeypatch):
+    # Review 3 Nov: the cast must not run before a cursor_budget refusal ("nothing pressed").
+    class Tight(Turn):
+        def cursor_presses_left(self):
+            return 5
+
+    calls = casting(monkeypatch, {'status': 'cast', 'spirit': 'Sense', 'on_map': True})
+    sim = hurt(far(Tight(turn=2)))
+    result = run(plan_act.plan_and_act(sim, RETREAT, 1000))
+    assert result['reason'] == 'cursor_budget' and calls == []
+
+
+def test_the_retreat_clause_alone_reads_foe_reach():
+    # Review 3 Nov: without the limit clause the retreat still needs each foe's reach.
+    class Reads(Turn):
+        foe_reads = 0
+
+        async def read_weapons(self, unit_object):
+            answer = await super().read_weapons(unit_object)
+            if unit_object in (2000, 2001):
+                self.foe_reads += 1
+                return {**answer, 'move': 2, 'weapons': [dict(w) for w in self.weapons[:1]]}
+            return answer
+
+    sim = hurt(far(Reads(turn=2)))
+    cache: dict[int, int] = {}
+    run(plan_act.plan_and_act(sim, parse_policy('move damaged units away from foes'), 1000,
+                              foe_reach=cache))
+    assert sim.foe_reads == 2 and set(cache) == {2000, 2001}

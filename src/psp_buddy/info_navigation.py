@@ -29,6 +29,7 @@ MAX_DUMPS = 24
 MAX_STATE_READS = 600              # memory-only; M11 cursor and dialogue checks (m11live17)
 MAX_WEAPON_READS = 200
 MAX_PROTECTED = 26                 # M12 retries: allies lost in earlier attempts
+MAX_POLICY_CHARS = 800             # m16-j: the runner's policy text reached 402 characters
 MAX_TARGET_READS = 200
 MAX_HIT_READS = 400
 MAX_GOTO_PRESSES = 400              # cursor-only presses per turn (separate from the tap budget)
@@ -53,7 +54,8 @@ MAX_RESPONSE_BYTES = 15000          # the mailbox limit is 16384 including its e
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 DIRECTIONS = ("up", "down", "left", "right")
 CONTEXTS = ("map", "unit_commands", "info", "move_range", "weapon_list", "target_select",
-            "attack_forecast", "result", "system_menu", "enemy_phase", "spirit_pilots",
+            "attack_forecast", "result", "system_menu", "enemy_phase", "enemy_forecast",
+            "spirit_pilots",
             "spirit_list", "spirit_confirm")
 ACTION_CONTEXTS = ("unit_commands", "move_range", "weapon_list", "target_select",
                    "attack_forecast")
@@ -92,6 +94,8 @@ PURPOSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], str | None]] = {
     # Start-of-run back-out only (user, 26 Oct: the stage-33 state was saved with a move range
     # open; one `cancel` returns to the command menu). `cancel` stays refused there.
     "close_command_menu": (("cross",), ("unit_commands",), None),
+    # M16 recon: directions on an enemy-attack forecast where `enemy_phase` stopped (a window).
+    "reaction_move": (DIRECTIONS, ("enemy_forecast",), None),
 }
 ACTION_PURPOSES = ("open_move", "move_cursor", "confirm_move", "open_attack", "select_weapon",
                    "select_target", "choose_target", "confirm_attack", "standby_after_move",
@@ -138,6 +142,8 @@ class InfoNavigation:
         read_spirit_cursor_bytes: Callable[[], Awaitable[list[int]]] | None = None,
         read_command_menu: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
         read_post_move_menu: Callable[[], Awaitable[tuple[int, int] | None]] | None = None,
+        read_reaction_cursors: Callable[[], Awaitable[tuple[int, int]]] | None = None,
+        read_menu_masks: Callable[[], Awaitable[tuple[int, int]]] | None = None,
         act_time_scale: float = 1.0,
         map_size: tuple[int, int] | None = None,
         poll_seconds: float = 0.05,
@@ -169,6 +175,8 @@ class InfoNavigation:
         self._read_spirit_cursor_bytes = read_spirit_cursor_bytes
         self._read_command_menu = read_command_menu
         self._read_post_move_menu = read_post_move_menu
+        self._read_reaction_cursors = read_reaction_cursors
+        self._read_menu_masks = read_menu_masks
         self._act_scale = act_time_scale
         self._acts = 0
         self._act_presses = 0
@@ -191,8 +199,10 @@ class InfoNavigation:
         self._occupied = None if occupied_tiles is None else {
             (int(x), int(y)) for x, y in occupied_tiles}
         self._menu_open = False
+        self._at_window = False                   # M16 recon: enemy_phase stopped at a window
         self._mech_names: dict[int, str] = {}     # foe mech names: static within a battle
         self._spirit_skip: set[str] = set()       # mechs with an unknown Command menu layout
+        self._foe_reach: dict[int, int] = {}      # M16: foe move + weapon reach (per trial)
         self._name_failed: set[int] = set()       # foes whose name read failed (not retried)
         self._clear: clear.ClearRun | None = None  # M13: fixed at the first turn_next
         self._handover: str | None = None         # M13: the handover reason; input is over
@@ -227,7 +237,8 @@ class InfoNavigation:
         actions = value.get("actions")
         if (actions not in (["move"], ["move", "standby"], ["move", "attack"], ["attack"],
                            ["attack_recon"], ["system_recon"], ["end_turn"], ["probe"],
-                           ["act"], ["spirit_recon"], ["spirit_cast_recon"], ["info_recon"])
+                           ["act"], ["spirit_recon"], ["spirit_cast_recon"], ["info_recon"],
+                           ["menu_recon"])
                 or not isinstance(value.get("unit"), str)):
             raise ValueError("invalid action declaration")
         assert isinstance(actions, list)
@@ -291,7 +302,8 @@ class InfoNavigation:
             self._check_system(purpose, arguments, actions)
             return
         casting = "spirit_cast_recon" in actions
-        if ("spirit_recon" in actions or casting) != (purpose in SPIRIT_PURPOSES):
+        browsing = "spirit_recon" in actions or "menu_recon" in actions
+        if (browsing or casting) != (purpose in SPIRIT_PURPOSES):
             raise ValueError("a Spirit recon trial permits only the Spirit menu")
         if purpose in CAST_PURPOSES:
             if not casting:
@@ -418,8 +430,12 @@ class InfoNavigation:
             return self._check_end_turn(arguments, keys), None
         if operation == "enemy_phase":
             # Circle only, after a confirmed End Turn; memory decides when it is over.
-            if (not {"sequence"} <= keys <= {"sequence", "accept_losses"}
+            limits = (arguments.get("evade_above", 0), arguments.get("defend_at", 100))
+            if (not {"sequence"} <= keys <= {"sequence", "accept_losses", "stop_at_window",
+                                             "evade_above", "defend_at"}
                     or type(arguments.get("accept_losses", False)) is not bool
+                    or type(arguments.get("stop_at_window", False)) is not bool
+                    or any(type(v) is not int or not 0 <= v <= 100 for v in limits)
                     or self._end_phase is None):
                 raise ValueError("enemy_phase needs a sequence (accept_losses optional) and a "
                                  "confirmed End Turn")
@@ -449,6 +465,11 @@ class InfoNavigation:
         backing_out = (operation == "press" and self._end_phase is None
                        and arguments.get("purpose") == "cancel"
                        and arguments.get("context") == "system_menu")
+        reacting = operation == "press" and arguments.get("purpose") == "reaction_move"
+        if reacting and not self._at_window:
+            raise ValueError("reaction presses need an enemy_phase stopped at a window")
+        if reacting:
+            backing_out = True              # the only input besides enemy_phase after End Turn
         if operation in ("press", "goto", "act", "plan_act", "probe_move") and not backing_out and (
                 self._end_menu_open or self._end_phase is not None):
             # Spec M10: once End Turn has started only end_turn confirm and enemy_phase send input.
@@ -484,12 +505,18 @@ class InfoNavigation:
             raise ValueError("button or screen context not allowed for this purpose")
         if not _integer(arguments["duration"], 1, 3):
             raise ValueError("duration must be 1..3 frames")
-        if purpose == "close_command_menu" and self._played():
+        menu_recon = (self._declaration or {}).get("actions") == ["menu_recon"]
+        if purpose == "close_command_menu" and self._played() and not menu_recon:
             raise ValueError("the command menu may be closed only before the first action")
         if purpose in ACTION_PURPOSES:
             self._check_action(purpose, arguments)
         tile = arguments.get("cursor_tile")
-        if purpose == "open_unit_menu" and not (self._tile(tile) and tile == self._target):
+        if purpose == "open_unit_menu" and menu_recon:
+            if not (self._tile(tile) and isinstance(tile, list)
+                    and self._ally_tiles is not None
+                    and (int(tile[0]), int(tile[1])) in self._ally_tiles):
+                raise ValueError("menu recon opens ally Command menus only")
+        elif purpose == "open_unit_menu" and not (self._tile(tile) and tile == self._target):
             raise ValueError("cursor is not on the trusted Destiny tile")
         if purpose in ENTRIES and arguments["highlighted_entry"] != ENTRIES[purpose]:
             raise ValueError("the matching command entry must be visibly highlighted")
@@ -613,7 +640,7 @@ class InfoNavigation:
         unit_object, text = arguments["unit_object"], arguments["policy"]
         bosses = arguments.get("bosses", [])
         if (type(unit_object) is not int or not RAM_START <= unit_object < RAM_END
-                or not isinstance(text, str) or len(text) > 400
+                or not isinstance(text, str) or len(text) > MAX_POLICY_CHARS
                 or not isinstance(bosses, list) or len(bosses) > 8
                 or not all(type(b) is int and RAM_START <= b < RAM_END for b in bosses)):
             raise ValueError("plan_act needs a unit, a policy text and optional bosses")
@@ -655,7 +682,8 @@ class InfoNavigation:
             min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
             damage_log=self._evidence / "damage-log.jsonl", boss_names=names,
             mech_names=self._mech_names, settle_first=self._dialogue_pending,
-            protected=frozenset(guarded), spirit_skip=self._spirit_skip)
+            protected=frozenset(guarded), spirit_skip=self._spirit_skip,
+            foe_reach=self._foe_reach)
         self._act_pending = None
         done = outcome.get("outcome")
         self._bonus_unit = (unit_object if isinstance(done, Mapping) and done.get("bonus_action")
@@ -727,11 +755,17 @@ class InfoNavigation:
         self._end_phase = phase
         return await end_turn.confirm(io, phase)
 
-    async def _run_enemy_phase(self, accept_losses: bool) -> dict[str, object]:
+    async def _run_enemy_phase(self, accept_losses: bool, stop_at_window: bool = False,
+                               evade_above: int | None = None,
+                               defend_at: int | None = None) -> dict[str, object]:
         assert self._end_phase is not None
         self._act_deadline = time.monotonic() + ACT_SECONDS
+        self._at_window = False
         outcome = await end_turn.advance(self._act_io(), self._end_phase,
-                                         accept_losses=accept_losses)
+                                         accept_losses=accept_losses,
+                                         stop_at_window=stop_at_window,
+                                         evade_above=evade_above, defend_at=defend_at)
+        self._at_window = outcome.get("phase") == "window"
         error = self._write_enemy_report()
         if outcome.get("phase") != "stopped":
             self._pending = None          # an accepted-loss resume clears an earlier stop
@@ -960,6 +994,18 @@ class InfoNavigation:
                 result: tuple[int, int] | None = await nav._act_read(nav._read_command_menu())
                 return result
 
+            async def menu_masks(self) -> tuple[int, int]:
+                if nav._read_menu_masks is None:
+                    raise act_macro.ActIOError("no menu mask reader in this trial")
+                result: tuple[int, int] = await nav._act_read(nav._read_menu_masks())
+                return result
+
+            async def reaction_cursors(self) -> tuple[int, int]:
+                if nav._read_reaction_cursors is None:
+                    raise act_macro.ActIOError("no reaction cursor reader in this trial")
+                result: tuple[int, int] = await nav._act_read(nav._read_reaction_cursors())
+                return result
+
             async def post_move_menu(self) -> tuple[int, int] | None:
                 if nav._read_post_move_menu is None:
                     raise act_macro.ActIOError("no post-move menu reader in this trial")
@@ -1114,7 +1160,10 @@ class InfoNavigation:
                            "result": answer.get("phase"), "reason": answer.get("reason")})
                 return answer
             if operation == "enemy_phase":
-                outcome = await self._run_enemy_phase(arguments.get("accept_losses") is True)
+                evade, defend = arguments.get("evade_above"), arguments.get("defend_at")
+                outcome = await self._run_enemy_phase(
+                    arguments.get("accept_losses") is True, arguments.get("stop_at_window") is True,
+                    evade if type(evade) is int else None, defend if type(defend) is int else None)
                 answer = {**outcome, "sequence": sequence, "act_presses_used": self._act_presses}
                 if len(json.dumps(answer, allow_nan=False)) > MAX_RESPONSE_BYTES:
                     answer = {**answer, "deltas": [], "truncated": True}

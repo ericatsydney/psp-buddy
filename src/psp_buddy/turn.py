@@ -2,7 +2,7 @@
 
 `ready_allies` orders the units still able to act, `TurnLog` classifies every `plan_act` result as
 fired, skipped (left as it is, with the reason), standby (moved, could not attack, waited: the
-user's MVP rule) or stop (hand over), and `next_unit` / `report`
+user's MVP rule; or advanced toward the foes, M16) or stop (hand over), and `next_unit` / `report`
 answer the loop "which unit next, are we done". Nothing here sends input to the game. A unit that
 is skipped stays unmoved in memory, so completion means "every ready ally acted or was skipped".
 """
@@ -13,8 +13,10 @@ from typing import Any
 ALLY_GROUP = 0
 FOE_GROUP = 12
 # cursor_budget (M15): nothing was pressed; the next turn_next hands the whole turn over.
+# held_turn_one (M16): a pilot without Focus/Sense stays unmoved on turn 1.
+# retreat_stay (M16, m16-i): a damaged unit with no safer tile casts and stays.
 SKIP_HANDOVERS = ("no_target", "retreat_needed", "unit_not_ready", "unit_not_ally", "protected",
-                  "cursor_budget")
+                  "cursor_budget", "held_turn_one", "retreat_stay")
 # act stages before the Move and the Start press: a failure there backs out and changes nothing.
 BEFORE_ACTION_STAGES = ("plan", "select", "attack_menu", "weapon", "target", "forecast")
 
@@ -86,6 +88,13 @@ class TurnLog:
         reason = result.get("reason")
         if result.get("ok") and phase == "fired":
             return "fired", None
+        if phase == "advanced":          # M16: moved toward the foes, or away when damaged
+            plan = result.get("plan")
+            expect = plan.get("expect") if isinstance(plan, Mapping) else None
+            rule = "retreat" if isinstance(expect, Mapping) and expect.get(
+                "rule") == "retreat" else "advance"
+            return ("standby", rule) if result.get("standby") else (
+                "stop", f"{rule}_standby_failed")
         if phase == "dialogue_pending":
             return "waiting", reason            # a story dialogue is still being skipped
         if phase == "handover":

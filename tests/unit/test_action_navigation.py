@@ -792,3 +792,50 @@ def test_cast_steps_are_refused_in_a_view_only_spirit_recon(owned, tmp_path):
 def test_spirit_cast_declaration_is_exact(owned, tmp_path, bad):
     with pytest.raises(ValueError):
         setup(owned, tmp_path, bad)
+
+
+MENU_RECON = {'unit': 'any', 'actions': ['menu_recon']}
+
+
+def menu_setup(owned, tmp_path, declaration=MENU_RECON):
+    service, transport, frame, stages = setup(owned, tmp_path, declaration)
+    service._ally_tiles = {(19, 5), (22, 20)}   # as the handoff passes `ally_tiles`
+    return service, transport, frame, stages
+
+
+def test_menu_recon_opens_any_ally_menu_browses_and_closes_but_never_acts(owned, tmp_path):
+    # M16 (user, 3 Nov): check every Command-menu layout in one launch, view only.
+    service, transport, frame, _ = menu_setup(owned, tmp_path)
+
+    async def scenario():
+        await press(service, frame, 1, 'map', 'open_unit_menu', cursor_tile=[22, 20])
+        await press(service, frame, 2, 'unit_commands', 'menu_direction', button='down')
+        await press(service, frame, 3, 'unit_commands', 'open_spirit',
+                    highlighted_entry='Spirit')
+        await press(service, frame, 4, 'spirit_list', 'spirit_menu_move', button='down')
+        for seq, purpose, context, extra in (
+                (5, 'cast_spirit', 'spirit_list', dict(spirit_name='Sense')),
+                (5, 'spirit_menu_move', 'spirit_list', dict(button='circle')),
+                (5, 'open_attack', 'unit_commands', dict(highlighted_entry='Attack')),
+                (5, 'open_move', 'unit_commands', dict(highlighted_entry='Move')),
+                (5, 'open_unit_menu', 'map', dict(cursor_tile=[18, 4]))):     # a foe tile
+            with pytest.raises(ValueError):
+                await press(service, frame, seq, context, purpose, **extra)
+        await press(service, frame, 5, 'spirit_list', 'cancel', button='cross')
+        await press(service, frame, 6, 'unit_commands', 'close_command_menu', button='cross')
+        await press(service, frame, 7, 'map', 'open_unit_menu', cursor_tile=[19, 5])
+        await press(service, frame, 8, 'unit_commands', 'close_command_menu', button='cross')
+    asyncio.run(scenario())
+
+
+def test_without_menu_recon_only_the_declared_unit_menu_opens(owned, tmp_path):
+    service, transport, frame, _ = menu_setup(owned, tmp_path, SPIRIT_RECON)
+    with pytest.raises(ValueError):
+        asyncio.run(press(service, frame, 1, 'map', 'open_unit_menu', cursor_tile=[22, 20]))
+
+
+@pytest.mark.parametrize('bad', [{'unit': 'any', 'actions': ['menu_recon', 'attack']},
+                                 {'unit': 'any', 'actions': ['menu_recon'], 'x': 1}])
+def test_menu_recon_declaration_is_exact(owned, tmp_path, bad):
+    with pytest.raises(ValueError):
+        setup(owned, tmp_path, bad)

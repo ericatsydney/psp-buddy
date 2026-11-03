@@ -18,6 +18,25 @@ Boss identity is supplied by the caller (`boss_objects` derives it from names an
 `non_boss_first` (user rule, 23 Oct) every non-boss foe is tried before any boss. Pilot will is
 not decoded: weapons needing more than `will` (default 100) are skipped (22 Oct live: Strike
 Freedom Super Dragoon needs 140).
+
+M16 ally safety (user, 3 Nov; docs/superpowers/specs/2026-11-03-ally-safety-advance-design.md):
+with `hold_unspirited_turn_one`, a pilot that has not learned Focus or Sense (`spirited`) attacks on
+game turn 1 only from its own tile and is otherwise held (`held_turn_one`); an unknown turn counts
+as turn 1. With `advance_when_no_target`, a unit that is not held and reaches no foe even after a
+move moves to the reachable free tile nearest to the nearest living foe (then lower move cost,
+then lower tile), if that is closer than where it stands: an `act` with `move_to` and no `attack`.
+With `max_foes_in_reach` N (user, 3 Nov) no move, to attack or to advance, ends on a tile that more
+than N living foes can reach next enemy phase: `foe_reach` maps a foe to its move plus longest
+weapon range (Manhattan, terrain ignored); a foe missing from it counts as reaching every tile.
+Attacking from the unit's own tile is never limited.
+
+M16 after run m16-i (user, 3 Nov): with `strongest_above_percent` N any foe above N% HP gets the
+strongest weapon that reaches it (after the cheap rule). With `retreat_damaged` a unit below
+`heal_below_percent` is not handed over `retreat_needed`; whatever the turn-1 hold says, it attacks
+only from a tile (its own included) that at most `max_foes_in_reach` foes reach, fewest first, then
+nearest; otherwise it moves to the free reachable tile with the fewest foes in reach, then farthest
+from the nearest foe, then cheaper, then lower (rule `retreat`), or stays (`retreat_stay`) when no
+tile beats its own. Without the move overlay the plan stays `no_target`.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -31,6 +50,7 @@ from .models import Policy
 ASSUMED_WILL = 100       # pilot will is not decoded; weapons needing more are never chosen
 BOSS_NAMES = ("Mercurius", "Vayeate", "Wing Gundam Zero")   # user, 23 Oct (stage 23)
 BOSS_HP_FACTOR = 2       # user, 23 Oct: max HP at least twice the foes' median is a boss
+SAFE_SPIRITS = ("Focus", "Sense")    # user, 3 Nov: either one; Alert does not count
 Tile = tuple[int, int]
 Candidate = tuple[dict[str, Any], int]      # weapon, number of tiles tried before it reached
 
@@ -89,7 +109,9 @@ def _rule_and_pick(options: Sequence[dict[str, Any]], target: Mapping[str, Any],
     hp, max_hp = target["hp"], target["max_hp"]
     if not boss and hp * 100 < policy.cheap_weapon_below_percent * max_hp:
         return "cheap", min(options, key=lambda w: (w["en_cost"] or 0, -w["power"], w["slot"]))
-    if boss and hp * 100 > policy.strongest_boss_above_percent * max_hp:
+    above = policy.strongest_above_percent
+    if (above is not None and hp * 100 > above * max_hp) or (
+            boss and hp * 100 > policy.strongest_boss_above_percent * max_hp):
         return "strongest", min(options, key=lambda w: (-w["power"], w["slot"]))
     ranked = sorted(options, key=lambda w: (w["power"], w["slot"]))
     return "median", ranked[(len(ranked) - 1) // 2]
@@ -97,6 +119,72 @@ def _rule_and_pick(options: Sequence[dict[str, Any]], target: Mapping[str, Any],
 
 def name_key(name: str) -> str:
     return "".join(ch for ch in name.casefold() if ch.isalnum())
+
+
+def spirited(pilot: Mapping[str, Any]) -> bool:
+    """The pilot (a `spirits.decode_pilot` answer) has learned Focus or Sense."""
+    rows = pilot.get("spirits")
+    return isinstance(rows, list) and any(
+        isinstance(r, Mapping) and r.get("name") in SAFE_SPIRITS and r.get("learned") is True
+        for r in rows)
+
+
+def foe_reach_of(weapon_read: Mapping[str, Any]) -> int | None:
+    """Move plus the longest range a foe can use after moving (P weapons), or the longest range
+    without moving, whichever is larger; MAP weapons are ignored. None when move is unreadable."""
+    move = weapon_read.get("move")
+    if type(move) is not int:
+        return None
+    best = move
+    for w in weapon_read.get("weapons") or []:
+        flags = w.get("flags") or {}
+        top = w.get("max_range")
+        if flags.get("map") or type(top) is not int:
+            continue
+        best = max(best, move + top if flags.get("p") else top)
+    return best
+
+
+def _threats(tile: Tile, foes: Sequence[Mapping[str, Any]], reach: Mapping[int, int]) -> int:
+    """Living foes that can reach `tile` next enemy phase (unknown reach: every tile)."""
+    return sum(1 for f in foes
+               if f["object"] not in reach or _distance(tile, _tile(f)) <= reach[f["object"]])
+
+
+def _advance(here: Tile, costs: Mapping[Tile, int], occupied: Collection[Tile],
+             foes: Sequence[Mapping[str, Any]], unit_object: int) -> dict[str, object]:
+    """Move-only plan toward the nearest living foe, or `no_target` when no tile is closer."""
+    def nearest(tile: Tile) -> tuple[int, int]:
+        return min((_distance(tile, _tile(f)), f["object"]) for f in foes)
+
+    if not foes:
+        return _handover("no_target")
+    best = min(((nearest(t), costs[t], t) for t in costs if t != here and t not in occupied),
+               default=None)
+    if best is None or best[0][0] >= nearest(here)[0]:
+        return _handover("no_target")
+    (distance, foe), _, tile = best
+    return {"act": {"unit_object": unit_object, "move_to": list(tile)},
+            "expect": {"rule": "advance", "toward": foe, "distance": distance}}
+
+
+def _retreat(here: Tile, costs: Mapping[Tile, int], occupied: Collection[Tile],
+             foes: Sequence[Mapping[str, Any]], reach: Mapping[int, int],
+             unit_object: int) -> dict[str, object]:
+    """Move-only plan to the tile fewest foes reach, then farthest from the nearest foe."""
+    def danger(tile: Tile) -> tuple[int, int]:
+        nearest = min((_distance(tile, _tile(f)) for f in foes), default=0)
+        return _threats(tile, foes, reach), -nearest
+
+    if not costs:
+        return _handover("no_target")           # plan_act opens the move overlay once
+    best = min(((danger(t), costs[t], t) for t in costs if t != here and t not in occupied),
+               default=None)
+    if best is None or best[0] >= danger(here):
+        return _handover("retreat_stay")
+    (threats, away), _, tile = best
+    return {"act": {"unit_object": unit_object, "move_to": list(tile)},
+            "expect": {"rule": "retreat", "threats": threats, "distance": -away}}
 
 
 def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, str],
@@ -117,7 +205,9 @@ def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, st
 
 def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Policy,
           unit_object: int, hits: Mapping[int, int],
-          bosses: Collection[int], will: int, exclude: Collection[int]) -> dict[str, object]:
+          bosses: Collection[int], will: int, exclude: Collection[int],
+          turn: int | None, is_spirited: bool,
+          foe_reach: Mapping[int, int] | None) -> dict[str, object]:
     units = state.get("units")
     if not isinstance(units, list):
         raise _Unknown("state_units")
@@ -133,7 +223,8 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         raise _Unknown("unit_max_hp")
     if not me.get("counted_as_unmoved"):
         return _handover("unit_not_ready")
-    if hp * 100 < policy.heal_below_percent * max_hp:
+    damaged = hp * 100 < policy.heal_below_percent * max_hp
+    if damaged and not policy.retreat_damaged:
         return _handover("retreat_needed")
     rows = weapon_read.get("weapons")
     if weapon_read.get("object") != unit_object or not isinstance(rows, list) or not rows:
@@ -154,11 +245,20 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         if _int(foe.get("max_hp"), "foe_max_hp") <= 0:
             raise _Unknown("foe_max_hp")
     occupied = {_tile(u) for u in units if _alive(u) and u.get("object") != unit_object}
-    costs = _reachable(state, here)
-    steps: list[tuple[Tile, bool]] = [(here, False)]
-    moves = sorted((t for t in costs if t != here and t not in occupied),
+    every = _reachable(state, here)
+    known = foe_reach or {}
+    limit = policy.max_foes_in_reach
+    costs = every if limit is None else {
+        t: c for t, c in every.items() if _threats(t, foes, known) <= limit}
+    held = (policy.hold_unspirited_turn_one and not is_spirited and not damaged
+            and (turn is None or turn <= 1))
+    moves = sorted((t for t in costs if t != here and t not in occupied and not held),
                    key=lambda t: (_distance(here, t), t))
-    steps += [(t, True) for t in moves]
+    steps: list[tuple[Tile, bool]] = [(here, False), *((t, True) for t in moves)]
+    if damaged:     # its own tile is limited too, and the safest attack tile comes first
+        steps = sorted((s for s in steps
+                        if limit is None or _threats(s[0], foes, known) <= limit),
+                       key=lambda s: (_threats(s[0], foes, known), _distance(here, s[0]), s[0]))
 
     # reach[(tile index)] -> slot -> target objects the weapon can hit from that tile
     reach: list[dict[int, set[int]]] = []
@@ -186,6 +286,9 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         boss_later = policy.non_boss_first and foe["object"] in bosses
         return (boss_later, fraction >= 1, fraction, _distance(here, _tile(foe)), foe["object"])
 
+    # (step index, foe, rule, weapon): the first foe in order, or for a damaged unit the foe it can
+    # attack from the safest tile (steps are sorted by danger), then the first in order.
+    choice: tuple[int, Mapping[str, Any], str, dict[str, Any]] | None = None
     for foe in sorted(foes, key=order):
         if hits.get(foe["object"]) == 0:
             continue
@@ -197,10 +300,17 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
         rule, weapon = _rule_and_pick(options, foe, policy, foe["object"] in bosses)
         index = next(i for i, per in enumerate(reach) if foe["object"] in per.get(weapon["slot"],
                                                                                      ()))
+        if choice is None or index < choice[0]:
+            choice = (index, foe, rule, weapon)
+        if not damaged:
+            break
+    if choice is not None:
+        index, foe, rule, weapon = choice
         attack = {"weapon": weapon["name"], "slot": weapon["slot"], "target_object": foe["object"]}
         instruction: dict[str, object] = {"unit_object": unit_object}
-        if index:
-            instruction["move_to"] = list(steps[index][0])
+        tile, moved = steps[index]
+        if moved:
+            instruction["move_to"] = list(tile)
         instruction["attack"] = attack
         hit = hits.get(foe["object"])
         expect: dict[str, object] = {
@@ -208,15 +318,24 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
             "expected_damage": None if hit is None else hit / 100 * weapon["power"],
             "target_hp": foe["hp"]}
         return {"act": instruction, "expect": expect}
+    if damaged:
+        return _retreat(here, every, occupied, foes, known, unit_object)
+    if held:
+        return _handover("held_turn_one")
+    if policy.advance_when_no_target:
+        return _advance(here, costs, occupied, foes, unit_object)
     return _handover("no_target")
 
 
 def plan_attack(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Policy,
                 unit_object: int, *, hits: Mapping[int, int] | None = None,
                 will: int = ASSUMED_WILL, exclude: Collection[int] = (),
-                bosses: Collection[int] = frozenset()) -> dict[str, object]:
+                bosses: Collection[int] = frozenset(), turn: int | None = None,
+                spirited: bool = False,
+                foe_reach: Mapping[int, int] | None = None) -> dict[str, object]:
     """One act instruction (or handover) for `unit_object`; see the module docstring."""
     try:
-        return _plan(state, weapon_read, policy, unit_object, hits or {}, bosses, will, exclude)
+        return _plan(state, weapon_read, policy, unit_object, hits or {}, bosses, will, exclude,
+                     turn, spirited, foe_reach)
     except (_Unknown, KeyError, TypeError, ValueError) as exc:
         return _handover(f"unknown_{exc}")
