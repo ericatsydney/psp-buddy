@@ -104,6 +104,35 @@ Priority order:
   spec `superpowers/specs/2026-11-07-trial-retention-design.md`). Snapshots still grow ~220 MB per trial
   (only ~0.6 GB unique across all 206): dedup is an open option. Latest slot 2 + game saves copied to
   `D:\PPSSPP-saves\ULJS00460-20261107T142348` (30 files, SHA-256 checked).
+- [x] 7 Nov live **s2f** (user's slot 2 saved 18:06, city map turn 1, checkpoint `slot2-20261107T1806`;
+  34 min). PPSSPP hung on its graceful close (window hidden, idle > 2 min): force-closed with the user's
+  OK; the 18:06 state was intact. Portable backup 55/55, runner backup 56/56; after the run originals 0/56
+  and portable 0/55 changed. Turns 1-3: 20 fired, 32 advanced, 11 held on turn 1, 11 no target; **no ally
+  lost**; non-boss 21 destroyed / 15 left; no boss named; **0 debugger freezes**. Handover `cursor_budget`
+  on turn 3, `screen_state: map`. **Retention worked live:** archives 5 -> 5 (new one added, oldest
+  removed), working copies 5 -> 5 (this trial's added, oldest removed), snapshots 206 -> 207.
+- [x] 7 Nov live **s2g** (user's slot 2 saved 19:25, same map turn 3 after acting, checkpoint
+  `slot2-20261107T1925`; 12.5 min): portable 55/55, runner 56/56; after the run originals 0/56, portable
+  0/55 changed. Enemy phase of turn 3, then turn 4: 6 fired, **map cleared** (non-boss 11 destroyed /
+  0 left, no boss), no ally lost, 0 freezes. Handover `cleared` with `screen_state: dialogue`
+  (`dialogue_pending`: the post-clear story scene). Retention again 5/5 archives and working copies,
+  snapshots 207 -> 208.
+- [ ] 7 Nov live **s2h** (user's slot 2 saved 20:25, turn 4, checkpoint `slot2-20261107T2025`; 10 min):
+  portable 55/55, runner 56/56; originals 0/56 changed. Turn 4: 3 fired, 9 advanced, 2 no target; non-boss
+  2 destroyed / 20 left; no ally lost. **Stopped with a clean `debugger_frozen` handover** (no
+  driver_error): during a cursor walk (a press every ~0.2 s with two reads after each, CPU running, no
+  pause) a `memory.read` got no reply; recovery's `cpu.status` (2 x 10 s) got none either. **New finding:**
+  a second, fresh WebSocket to PPSSPP's debugger connected at once but got no reply to `version` or
+  `cpu.status` (10 s each, >5 min after the freeze), while the game still rendered (move range on screen).
+  So this freeze is PPSSPP's whole debugger, not our socket: reconnecting cannot recover it. It differs
+  from s2e (link alive, only `cpu.stepping` ignored). Retention again 5/5, snapshots 208 -> 209.
+  Afterwards PPSSPP hung on its graceful close again (hidden window; the earlier 7 Nov hang also followed a
+  freeze run, s2e): force-closed with the stuck helper for the rerun.
+- [x] 7 Nov live **s2i** = s2h rerun from the same checkpoint (27 min): portable 55/55, runner 56/56;
+  after the run originals 0/56, portable 0/55 changed. Turns 4-5: 18 fired, 18 advanced, 4 no target;
+  non-boss 9 destroyed / 14 left; no ally lost; **0 freezes** (the s2h freeze did not repeat on the same
+  state, so it is not tied to that position). Handover `cursor_budget` on turn 5, on the map. Retention
+  5/5, snapshots 209 -> 210.
 
 ## 2b. Current short-term goal — live state reading and agent-chosen actions (19 Oct)
 
