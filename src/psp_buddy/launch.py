@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from . import retention
 from .backup import BackupGate, Inventory, _safe_path, inventory, sha256, writable_trial_root
 from .config import RunConfig, paths_overlap
 from .models import BackupReceipt
@@ -248,6 +249,7 @@ class Launcher:
         self.inspector = inspector if inspector is not None else WindowsInspector()
         self.clock = clock
         self._issued: dict[int, PreparedLaunch] = {}
+        self.last_prune: retention.PruneResult | None = None
 
     def prepare(self, config: RunConfig, *, state_filename: str,
                 system_root: Path, graphics_backend: int | None = None,
@@ -423,6 +425,12 @@ class Launcher:
                                   ((receipt.snapshot_root, inventory(receipt.snapshot_root)),)
                                   + (() if archive is None else ((archive, prior_entries),)))
         self._issued[id(prepared)] = prepared
+        # Old copies nothing reads again (user, 7 Nov): keep the newest few, never block a launch.
+        working = retention.prune_working_copies(config.backup_root, protect=trial)
+        archives = (retention.prune_runtime_archives(runtime_root, protect=archive)
+                    if runtime_root is not None else retention.PruneResult())
+        self.last_prune = retention.PruneResult(working.removed + archives.removed,
+                                                working.failed + archives.failed)
         return prepared
 
     def start(self, prepared: PreparedLaunch) -> LaunchSession:

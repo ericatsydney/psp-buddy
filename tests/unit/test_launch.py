@@ -325,6 +325,27 @@ def test_owned_other_network_address_rejected(prepared_env):
     with pytest.raises(ValueError, match='listener'):
         session.claim_connection()
 
+def test_prepare_prunes_old_archives_and_working_copies(prepared_env, tmp_path):
+    from dataclasses import replace
+    launcher, config, system, inspector, process = prepared_env
+    runtime = tmp_path / 'runtime'
+    first = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                             system_root=system, runtime_root=runtime)
+    active = first.memstick_root / 'PSP'
+    config = replace(config, portable_savedata=active / 'SAVEDATA',
+                     portable_states=active / 'PPSSPP_STATE')
+    for _ in range(7):
+        prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
+                                    system_root=active / 'SYSTEM', runtime_root=runtime)
+    assert len(list(tmp_path.glob('runtime-archive-*'))) == 5
+    trials = sorted(p for p in config.backup_root.iterdir() if (p / 'manifest.json').exists())
+    assert len(trials) == 8
+    assert [t for t in trials if (t / 'working').exists()] == trials[-5:]
+    assert all((t / 'snapshot').is_dir() for t in trials)
+    assert prepared.receipt.snapshot_root.parent == trials[-1]
+    assert launcher.last_prune is not None and launcher.last_prune.failed == ()
+
+
 def test_static_runtime_reuses_paths_and_preserves_previous_trial(prepared_env, tmp_path):
     from dataclasses import replace
 

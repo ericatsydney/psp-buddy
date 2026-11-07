@@ -97,6 +97,13 @@ Priority order:
   records were overwritten); keep more files.
   User's newest slot 2 (7 Nov 06:52) is the intermission main menu (stage 37), not a battle.
 - [ ] Cursor-budget handover does not settle a pending story dialogue (4 Nov, s4-d).
+- [x] Disk space (7 Nov): drive C: was full (648 MB free; project 127 GB). Deleted by hand with the user's
+  OK: 477 pytest temp folders, 182 of 187 runtime archives, 201 of 206 trial `working` copies (newest 5
+  kept; all 206 verified snapshots kept); C: now 73 GB free (log `local/cleanup-20261107.log`).
+  `Launcher.prepare` now does the same after each launch (`psp_buddy.retention`, keep 5, best effort;
+  spec `superpowers/specs/2026-11-07-trial-retention-design.md`). Snapshots still grow ~220 MB per trial
+  (only ~0.6 GB unique across all 206): dedup is an open option. Latest slot 2 + game saves copied to
+  `D:\PPSSPP-saves\ULJS00460-20261107T142348` (30 files, SHA-256 checked).
 
 ## 2b. Current short-term goal — live state reading and agent-chosen actions (19 Oct)
 
