@@ -8,7 +8,7 @@ import os
 import re
 import stat
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from .debugger import DebuggerAdapter
 from .launch import LaunchSession
 from .navigation_mailbox import NavigationRefused
 from .policy import parse_policy
+from .tactics import BOSS_HP_FACTOR
 from .weapons import RAM_END, RAM_START
 
 MAX_TAPS = 16
@@ -46,6 +47,13 @@ MAX_PLAYER_TURNS = 6                # M13 turn budget 5, plus one (defence in de
 ACT_PRESS_RESERVE = 60              # a run starts only with at least this many presses left
 ACT_SECONDS = 105                   # cooperative budget; the helper cancels hard at 120 s, which
                                     # would leave the emulator paused, so the macro never gets there
+# 7 Nov (debugger-freeze fallback): a helper read slower than this is a freeze (normal reads
+# take < 1 s, a state read about 2 s); the adapter checks the link and the read is retried once.
+READ_FREEZE_SECONDS = 15.0
+READERS = ("_read_state", "_read_weapons", "_read_targets", "_read_hit", "_read_cursor",
+           "_read_menu_row", "_read_spirits", "_read_spirit_cursor_bytes", "_read_command_menu",
+           "_read_post_move_menu", "_read_reaction_cursors", "_read_menu_masks")
+
 MAX_GOTO_STEPS = 80
 MAX_GOTO_JUMP = 40
 GOTO_LONG_HOLD = 14                 # frames; a long hold repeats the cursor move unpredictably
@@ -117,6 +125,11 @@ def _integer(value: object, lower: int, upper: int) -> bool:
     return type(value) is int and lower <= value <= upper
 
 
+class DebuggerFrozen(RuntimeError):
+    """The debugger link stopped answering and could not be recovered (or a press hung).
+    Not an ActIOError on purpose: the act code must not try retreat presses on a frozen link."""
+
+
 class InfoNavigation:
     """One instance per protected launch. Any transport failure is terminal."""
 
@@ -149,6 +162,7 @@ class InfoNavigation:
         poll_seconds: float = 0.05,
         settle_seconds: float = 0.8,
         ally_tiles: Iterable[tuple[int, int]] | None = None,
+        boss_names: Sequence[str] | None = None,
     ) -> None:
         session.assert_bound()
         if len(target_tile) != 2 or not all(_integer(n, 0, 1023) for n in target_tile):
@@ -177,6 +191,11 @@ class InfoNavigation:
         self._read_post_move_menu = read_post_move_menu
         self._read_reaction_cursors = read_reaction_cursors
         self._read_menu_masks = read_menu_masks
+        self._freezes: list[dict[str, object]] = []
+        for attr in READERS:
+            reader = getattr(self, attr)
+            if reader is not None:
+                setattr(self, attr, self._guard_reader(reader))
         self._act_scale = act_time_scale
         self._acts = 0
         self._act_presses = 0
@@ -205,6 +224,8 @@ class InfoNavigation:
         self._foe_reach: dict[int, int] = {}      # M16: foe move + weapon reach (per trial)
         self._name_failed: set[int] = set()       # foes whose name read failed (not retried)
         self._clear: clear.ClearRun | None = None  # M13: fixed at the first turn_next
+        # The checkpoint's own boss names (4 Nov, s4-c): only these are bosses, no max-HP rule.
+        self._boss_names = tuple(boss_names) if boss_names else ()
         self._handover: str | None = None         # M13: the handover reason; input is over
         self._pending: str | None = None          # M13: handover for the next turn_next
         self._player_turns = 1
@@ -673,7 +694,7 @@ class InfoNavigation:
         assert type(unit_object) is int and isinstance(text, str)
         bosses = arguments.get("bosses", [])
         assert isinstance(bosses, list)
-        names = arguments.get("boss_names")
+        names = arguments.get("boss_names") or (list(self._boss_names) or None)
         assert names is None or isinstance(names, list)
         guarded = arguments.get("protected", [])
         assert isinstance(guarded, list)
@@ -681,6 +702,7 @@ class InfoNavigation:
             self._act_io(), parse_policy(text), unit_object, bosses=frozenset(bosses),
             min_hit=int(arguments.get("min_hit", plan_act.MIN_HIT)),  # type: ignore[call-overload]
             damage_log=self._evidence / "damage-log.jsonl", boss_names=names,
+            boss_factor=0 if self._boss_names else BOSS_HP_FACTOR,
             mech_names=self._mech_names, settle_first=self._dialogue_pending,
             protected=frozenset(guarded), spirit_skip=self._spirit_skip,
             foe_reach=self._foe_reach)
@@ -852,7 +874,7 @@ class InfoNavigation:
             await self._read_foe_names(state)
         try:
             if self._clear is None:
-                self._clear = clear.begin(state, self._mech_names)
+                self._clear = self._begin_clear(state)
             status: dict[str, Any] | None = clear.status(self._clear, state, self._mech_names)
             reason = (self._handover or self._pending
                       or clear.decide(self._clear, state, mech_names=self._mech_names))
@@ -865,6 +887,11 @@ class InfoNavigation:
             return status, reason, None
         self._handover = reason
         return status, reason, self._write_handover(state, reason)
+
+    def _begin_clear(self, state: Mapping[str, object]) -> clear.ClearRun:
+        if self._boss_names:
+            return clear.begin(state, self._mech_names, self._boss_names, factor=0)
+        return clear.begin(state, self._mech_names)
 
     def _over_cursor_budget(self, state: Mapping[str, object], unit_object: object) -> bool:
         """Reaching the next unit (plus one map proof) would overrun this turn's cursor budget.
@@ -892,6 +919,12 @@ class InfoNavigation:
             stop = reason.startswith("stopped:") or (
                 reason == self._pending and reason != "player_turn_limit")
             extra: dict[str, Any] = {"screen_state": "after_stop" if stop else "map"}
+            if reason == "debugger_frozen":
+                extra["screen_state"] = "unknown"     # the last screen was never confirmed
+            if self._freezes:
+                extra["freezes"] = list(self._freezes)
+            if not stop and self._dialogue_pending and reason != "debugger_frozen":
+                extra.update(screen_state="dialogue", dialogue_pending=True)
             for name in ("turn-report", "enemy-phase-report"):
                 key = name.replace("-", "_") + "s"
                 extra[key] = sorted((p.name for p in self._evidence.glob(f"{name}-*.json")),
@@ -937,7 +970,12 @@ class InfoNavigation:
                 nav._act_presses += 1
                 nav._log({"operation": "act_press", "button": button,
                           "monotonic_ns": time.monotonic_ns()})
-                await nav._adapter.press(button, frames)
+                try:
+                    await nav._adapter.press(button, frames)
+                except TimeoutError as exc:
+                    # Its effect on the game is unknown: never repeated, never recovered.
+                    nav._freezes.append({"kind": "press", "button": button, "recovered": False})
+                    raise DebuggerFrozen(f"press {button} unanswered") from exc
 
             def cursor_presses_left(self) -> int:
                 return MAX_GOTO_PRESSES - nav._used("_goto_presses")
@@ -1029,6 +1067,10 @@ class InfoNavigation:
         except (NavigationRefused, ValueError) as exc:
             outcome = f"refused: {exc}"
             raise act_macro.ActIOError(str(exc)) from exc
+        except BaseException as exc:
+            # s2d (6 Nov) logged a 60 s hang as "ok"; a freeze now reads "error: DebuggerFrozen".
+            outcome = f"error: {type(exc).__name__}"
+            raise
         finally:
             self._log({"operation": "act_read", "seconds": round(time.monotonic() - started, 2),
                        "outcome": outcome, "monotonic_ns": time.monotonic_ns()})
@@ -1103,6 +1145,38 @@ class InfoNavigation:
                 "stalled": stalls >= 2, "unexpected_move": unexpected,
                 "goto_presses_used": self._goto_presses}
 
+    def _guard_reader(self, reader: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        async def guarded(*args: Any) -> Any:
+            return await self._guarded(lambda: reader(*args))
+        return guarded
+
+    async def _guarded(self, call: Callable[[], Awaitable[Any]]) -> Any:
+        """A read that hangs (s2d, 6 Nov) is retried once if the adapter recovers the link;
+        otherwise DebuggerFrozen ends the trial with a clean handover."""
+        for attempt in (1, 2):
+            started = time.monotonic()
+            try:
+                async with asyncio.timeout(READ_FREEZE_SECONDS):
+                    return await call()
+            except TimeoutError as exc:
+                recover = getattr(self._adapter, "recover", None)
+                recovered = attempt == 1 and recover is not None and bool(await recover())
+                record: dict[str, object] = {
+                    "kind": "read", "attempt": attempt, "recovered": recovered,
+                    "seconds": round(time.monotonic() - started, 2)}
+                self._freezes.append(record)
+                self._log({"operation": "debugger_freeze", **record,
+                           "monotonic_ns": time.monotonic_ns()})
+                if not recovered:
+                    raise DebuggerFrozen("read unanswered") from exc
+        raise AssertionError("unreachable")
+
+    def _frozen_answer(self, sequence: int, detail: str) -> dict[str, object]:
+        handover = {"reason": "debugger_frozen"}
+        return {"ok": False, "phase": "handover", "reason": "debugger_frozen", "detail": detail,
+                "handover": handover, "unit_object": None, "done": False, "stopped": None,
+                "sequence": sequence}
+
     def _log(self, record: dict[str, object]) -> None:
         self._evidence.mkdir(parents=True, exist_ok=True)
         with (self._evidence / "agent-navigation-inputs.jsonl").open("a", encoding="utf-8") as f:
@@ -1118,6 +1192,8 @@ class InfoNavigation:
         self._next += 1
         if name:
             self._uses[name] = self._uses.get(name, 0) + 1
+        if self._handover == "debugger_frozen":
+            return self._frozen_answer(sequence, "already frozen: no further input or reads")
         try:
             if operation == "probe_move":
                 probe_tile = arguments["tile"]
@@ -1268,6 +1344,11 @@ class InfoNavigation:
                 if reason is None and self._over_cursor_budget(state, chosen["unit_object"]):
                     # M15: hand over on the map before a walk the turn's budget cannot finish.
                     reason = self._handover = "cursor_budget"
+                    if self._dialogue_pending:
+                        # s4-d (4 Nov): the last act left a story dialogue up; finish it first.
+                        self._act_deadline = time.monotonic() + ACT_SECONDS
+                        settled = await act_macro.settle_dialogue(self._act_io())
+                        self._dialogue_pending = not settled.get("settled")
                     handover_error = self._write_handover(state, reason)
                 if reason is not None:
                     chosen = {**chosen, "unit_object": None, "done": False}
@@ -1340,6 +1421,17 @@ class InfoNavigation:
                     "receipt": bool(receipt), "taps_remaining": self._budget() - self._taps}
         except NavigationRefused:
             raise            # refused before anything was sent; the session stays usable
+        except (DebuggerFrozen, TimeoutError) as exc:
+            if isinstance(exc, TimeoutError) and not getattr(self._adapter, "uncertain", False):
+                self._failed = True       # not the debugger link (7 Nov review): fail as before
+                raise
+            # 7 Nov fallback: stop cleanly (handover.json) instead of disabling the helper.
+            self._handover = "debugger_frozen"
+            error = self._write_handover(self._turn_state, "debugger_frozen")
+            self._log({"sequence": sequence, "operation": operation, "handover": "debugger_frozen",
+                       "detail": repr(exc), "monotonic_ns": time.monotonic_ns()})
+            answer = self._frozen_answer(sequence, repr(exc))
+            return {**answer, "report_error": error} if error else answer
         except BaseException:
             self._failed = True
             raise

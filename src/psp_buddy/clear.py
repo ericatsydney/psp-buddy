@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import retry, targets
-from .tactics import BOSS_NAMES, boss_objects, name_key
+from .tactics import BOSS_HP_FACTOR, BOSS_NAMES, boss_objects, name_key
 
 TURN_BUDGET = 5          # user, 25 Oct: player turns 7 to 11 from the turn-7 checkpoint
 
@@ -49,13 +49,14 @@ def _tile(u: Mapping[str, Any]) -> list[int] | None:
 
 
 def begin(state: Mapping[str, Any], mech_names: Mapping[int, str],
-          names: Collection[str] = BOSS_NAMES) -> ClearRun:
-    """The run's fixed boss set and start state, from the first state of the helper session."""
+          names: Collection[str] = BOSS_NAMES, *, factor: float = BOSS_HP_FACTOR) -> ClearRun:
+    """The run's fixed boss set and start state, from the first state of the helper session.
+    `factor` 0 keeps only the named bosses (a checkpoint that names its stage's bosses)."""
     units, turn = _units(state), _turn(state)
     start = {"turn": turn, "units": [
         {"object": u["object"], "group": u["raw_menu_group_byte"], "hp": u["hp"],
          "max_hp": u.get("max_hp"), "tile": _tile(u)} for u in units]}
-    return ClearRun(turn, boss_objects(units, mech_names, names), start,
+    return ClearRun(turn, boss_objects(units, mech_names, names, factor), start,
                     frozenset(name_key(n) for n in names) - {""})
 
 

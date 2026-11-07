@@ -62,6 +62,42 @@ Priority order:
   Repair/Supply entries); anything still unknown hands over safely.
 - [ ] P6 Real test: run end to end on 2-3 other user saves from different stages; record each result.
 
+## Backlog (user will fix later)
+
+- [x] Post-counter ally safety (6 Nov, run s2c): closed 7 Nov, user: current behaviour is fine; when an ally
+  dies the runner hands over (`ally_destroyed`). Cause noted: own-tile attacks ignore the foes-in-reach limit.
+- [ ] Hung memory read after a Circle press -> `driver_error` (5 Nov, s2 / s2t6): longer gap after Circle
+  or retry a hung read instead of disabling reads. Did not recur in s2c; recurred in s2d (6 Nov) after a
+  Down press in the weapon list, so it is not Circle-specific - a press gap alone will not fix it.
+  7 Nov (spec `superpowers/specs/2026-11-07-debugger-freeze-design.md`): every debugger request is now
+  traced to `debugger-trace.jsonl`; `_act_read` logs timeouts. Probe `local/m17-tools/freeze_probe.py` on
+  checkpoint `slot2-20261106T2255` (Nu Gundam's weapon list, unit 149300064): fp1 PPSSPP crash 0x864414
+  at start-up; fp2 aborted before cycles (the lowest ally, a Macross Quarter, has no Attack: Down+Circle
+  opened Morph; screenshot caught it); **fp3: 400 cycles, 799 presses, no freeze** (read max 0.72 s);
+  fp4 (state reads mixed in): ~9600 requests, no freeze (max 0.57 s), stopped by the user. Backups
+  verified each launch; originals 0/56 and portable 0/55 changed. Freeze not reproduced; cause still open.
+  Also done: a `cursor_budget` handover now settles a pending story dialogue first (s4-d).
+  **Fallback built (user, 7 Nov):** every helper read has a 15 s freeze limit; on a freeze the adapter
+  checks the link (`cpu.status`, 2 x 10 s), resumes a CPU our pause left stopped and the read is retried
+  once; otherwise (or on a press timeout) a clean `debugger_frozen` handover (`handover.json`,
+  `screen_state: unknown`), no more input; clear_loop / run.py / backout.py report it. Helper op limit
+  120 s. Checks: pytest 1793 / 1 skipped (`--basetemp local/pytest-m17`; launch tests need an in-repo
+  temp dir), local tools 247, ruff, strict mypy; code review (high) 7 findings, all fixed. Not yet
+  live-tested: needs a battle save (the newest slot 2 is the stage-37 main menu). Nothing committed.
+- [x] 7 Nov live **s2e** (user's slot 2 saved 08:26, city map, turn 1, checkpoint `slot2-20261107T0826`;
+  24 min): portable backup 55/55, runner backup 56/56; after the run originals 0/56, portable 0/55 changed.
+  Turns 1-5 played (17 fired, 14 advanced, 3 held turn 1, 4 no target), every enemy phase done, **no ally
+  lost**, non-boss 11 destroyed / 3 left, boss Caerleon-Class; handover `turn_budget` on the map.
+  **2 freezes, both recovered** (15 s each, the retried read took 0.5 s), both right after a Circle press.
+  **Root cause seen in the trace:** the link was healthy (~990 `cpu.status` replies in 15 s), but PPSSPP
+  ignored the `cpu.stepping` request sent ~2.5 s after the Circle: every status said running, and
+  `_transition` polled for its whole timeout (60 s before the fallback = the old `driver_error`). After
+  recovery a new `cpu.stepping` took effect at once. Next fix: re-send `cpu.stepping` when the CPU has not
+  stepped within ~1 s. Also: trace rotation keeps only the newest 2 x 5000 lines (the first freeze's
+  records were overwritten); keep more files.
+  User's newest slot 2 (7 Nov 06:52) is the intermission main menu (stage 37), not a battle.
+- [ ] Cursor-budget handover does not settle a pending story dialogue (4 Nov, s4-d).
+
 ## 2b. Current short-term goal — live state reading and agent-chosen actions (19 Oct)
 
 Plan: [plan](superpowers/plans/2026-10-19-live-state-and-chosen-actions.md), [design](superpowers/specs/2026-10-19-live-state-and-chosen-actions-design.md).
@@ -473,6 +509,65 @@ Next step: a live test from a new save state the user will provide (back up firs
 disk so the 60 s backup gate passes); then shorten the post-Start wait; then P6 (other saves).
 Still open: Task 10 checks (user: later).
 Committed 4 Nov (M16 code, spec, plan, this file); recon changes stay in ignored local/ tools.
+
+- [x] 4 Nov live test, user's new "slot 4" (user: a slot number means the **project PPSSPP's** memstick
+  `local/runtime/ppsspp-v1.20.4/app/memstick/PSP/PPSSPP_STATE`, file `_<N-1>`, not OneDrive; `prepare.py`
+  now defaults there and has `--state-dir`). PPSSPP 1.20.4 writes zstd states: the offline extractor
+  (`local/state-memory-20261016/extract.py`) now also reads compression 2 (Python 3.14 `compression.zstd`).
+  First two runs (s4-a, s4-b) loaded the OneDrive slot-4 file by mistake and were stopped before any input.
+  **s4-c** (checkpoint `pslot4-20261104`, 28x28 sea/island map, turn 1, 23 allies, 30 foes; 19 min):
+  backups verified (OneDrive 56/56, portable memstick 55/55), back-out 0 presses (map). Turn 1: 2 fired,
+  the rest held `held_turn_one`; enemy phase 1: 6 foe attacks under 30% (no reaction), 5 foes destroyed,
+  no ally damaged. Turn 2: 11 fired, 6 advances, 6 `no_target`. Enemy phase 2: 4 Evades confirmed, one
+  reaction skipped `hit_unreadable`; **149299232 (Distortion Shoot unit) 5800 -> 0** -> handover
+  `ally_destroyed`, game left on the trial copy at a dialogue line (ULJS00460_00054). After the run both
+  originals and the portable memstick were unchanged (0/56, 0/55).
+  Findings for the user: (1) the stage's boss list names every "Android DB ADAMON" as a boss, so 8 of
+  turn 2's attacks went into one 18,500-HP Android (non-bosses out of reach -> bosses allowed); (2) a
+  full-HP unit fell in one enemy phase although it attacked from a tile at most 2 foes reach (reach ignores
+  terrain/flying, and the boss-named foes may hit hard); one hit was unreadable, so no Eva./Def. there.
+- [x] 4 Nov, user: "the boss should be D-Beast Rook Adamon P". Per-checkpoint boss names, red-first:
+  `prepare.py --boss NAME` (repeatable) writes `boss_names` into the manifest; the handoff passes them to
+  `InfoNavigation(boss_names=...)`; then `clear.begin(..., factor=0)` and `plan_and_act(boss_factor=0)`
+  make only the named foes bosses (no max-HP rule). Without names nothing changes. Checks: pytest 1770 /
+  1 skipped, local tools + helper 233, ruff, strict mypy. (The prepare test was written with the code.)
+  **s4-d** (new slot 4 saved 21:59, checkpoint `pslot4b-20261104`, turn 1 with all allies already moved;
+  34 min): boss set = D-Beast Rook ADAMON P only. End Turn + enemy phase 1 (5 Evades), turn 2: 18 fired,
+  4 advances; enemy phase 2 (4 Evades); turn 3: 18 fired, 1 advance; then handover `cursor_budget`
+  with **no ally lost**, non-boss foes 15 destroyed / 13 left, 6 allies unmoved. Backups 56/56 and portable
+  55/55 verified; originals 0/56 and portable 0/55 changed after. Note: handover.json says
+  `screen_state: map`, but the final screenshot (ULJS00460_00060) shows a story dialogue (Asakim, after 5
+  `dialogue_pending` steps in turn 3): the cursor-budget handover does not settle a pending dialogue.
+  Every enemy phase skipped 2 reactions as `hit_unreadable`. One ally ended at 675/5300 HP.
+- [x] 5 Nov live, user's new slot 2 (space map, Arietis boss). Every launch had portable memstick backups
+  (55/55 verified, 0 changed between runs) and the runner's OneDrive backups (56/56). Checkpoints
+  `slot2-20261105` (turn 4) and `slot2-20261105T2210` (turn 6, the user's save after turn 5).
+  **s2**: turn 4 (17 fired, 3 no-target, 8 advanced), enemy phase, turn 5 (4 fired), then stopped
+  with `driver_error`. **s2b** was paused by the user, mid-turn 5 (controller stopped; `clear_loop.py 56` resumed it on
+  the same helper): 9 fired, 17 advanced, handover `cursor_budget`, no ally lost. **s2t6**: 3 units, then
+  the same `driver_error`.
+  **Open bug (next):** both `driver_error` stops were a memory read straight after a Circle press that hung
+  60 s (`disabled.json` TimeoutError, reads disabled). The game was not stuck: the user could move the cursor.
+  Same pattern as fr-s33b (1 Nov), which `DebuggerAdapter.PRESS_GAP_SECONDS = 0.2` was meant to fix; that gap
+  is not always enough. Options: a longer gap after Circle, or retry a hung read rather than disable reads.
+  Also: after a handover the helper refuses input, so another round needs a save + relaunch (user saves slot 2).
+  User saved the state again on 5 Nov night to continue the test.
+- [x] 6 Nov live, user's slot 2 re-saved 07:30 (same space map, turn 6, 24 allies unmoved). Portable memstick
+  backup `backups/portable-memstick-20261106T075120Z` 55/55; runner backup 56/56; after the run originals
+  0/56 and portable 0/55 changed. Checkpoint `slot2-20261106` (prepare.py needs `.venv/Scripts/python.exe`).
+  **s2c** (22 min): back-out 0 presses; turn 6: 19 fired, 6 advanced; boss set Arietis only (default rules).
+  Enemy phase 6: 3 Evades confirmed, 9 reactions left default (hit 2-26%); 4 more foes destroyed
+  (12 non-boss destroyed, 11 left); then handover `ally_destroyed`: 149301728 (Ennil's unit) had taken
+  a counter 5750 -> 2956 from its own Bazooka attack (89% hit) and fell in the enemy phase. No `driver_error`
+  this run. Game left on the trial copy at Ennil's retreat line (ULJS00460_00032).
+  Finding: a unit left near half HP by a counter is not retreated or guarded before the enemy phase.
+- [x] 6 Nov live, user's new slot 2 saved 22:55 (new space map with a station, turn 2, 23 allies unmoved).
+  PPSSPP closed gracefully first; portable backup `portable-memstick-20261106T125633Z` 55/55; runner backup
+  56/56; after the run originals 0/56 and portable 0/55 changed. Checkpoint `slot2-20261106T2255`, default
+  boss rules (no names given). **s2d** (25 min): turn 2: 27 units (fired/advanced/no-target), enemy phase 2
+  done with no ally damaged (2 foes destroyed, 1 reaction skipped), turn 3: 18 units, then `driver_error`
+  - the same hung read (`disabled.json` TimeoutError, 60 s), this time after the 3rd **Down** press in Big O's
+  weapon list (screen ULJS00460_00050, MeleeAttack row), not after a Circle. No ally lost.
 
 ## Session goal history — 20 October
 

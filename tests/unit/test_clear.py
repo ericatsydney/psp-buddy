@@ -140,3 +140,11 @@ def test_stage_33_groups_count_13_as_foe_and_ignore_npc_and_third_force():
     assert clear.nonboss_left(run, state(units, turn=5)) == [40, 41]
     gone = allies() + [unit(50, 5, hp=29000), unit(60, 1, hp=5500)]
     assert clear.decide(run, state(gone, turn=5)) == 'cleared'
+
+
+def test_a_named_boss_list_can_turn_the_max_hp_rule_off():
+    # s4-c (4 Nov): the HP rule made 18,500-HP "Android DB ADAMON" grunts bosses; the user names
+    # the stage's only boss ("D-Beast Rook ADAMON P"), so a checkpoint's own names use factor 0.
+    run = clear.begin(state(start_units()), NAMES, ['Vayeate'], factor=0)
+    assert run.bosses == frozenset({12})
+    assert clear.nonboss_left(run, state(start_units())) == [11, 13, 14, 15]

@@ -1244,3 +1244,184 @@ def test_the_act_io_reads_the_menu_masks_through_the_helper_reader(owned, tmp_pa
     bare, _, _ = make(owned, tmp_path / 'b', sim)
     with pytest.raises(act_macro.ActIOError):
         asyncio.run(bare._act_io().menu_masks())
+
+
+def test_run_boss_names_replace_the_defaults_and_the_max_hp_rule(owned, tmp_path):
+    # s4-c (4 Nov): a checkpoint names its stage's bosses; nothing else counts as one.
+    sim = plan_sim()
+    service, adapter, frame = make(owned, tmp_path, sim)
+    service._boss_names = ('D-Beast Rook ADAMON P',)
+    state = {'turn': {'turn': 1}, 'units': [
+        {'object': 1, 'raw_menu_group_byte': 0, 'hp': 5000, 'max_hp': 5000},
+        {'object': 2, 'raw_menu_group_byte': 12, 'hp': 18500, 'max_hp': 18500},
+        {'object': 3, 'raw_menu_group_byte': 12, 'hp': 5000, 'max_hp': 5000},
+        {'object': 4, 'raw_menu_group_byte': 12, 'hp': 5000, 'max_hp': 5000},
+        {'object': 5, 'raw_menu_group_byte': 12, 'hp': 36000, 'max_hp': 36000}]}
+    service._mech_names.update({2: 'Android DB ADAMON', 3: 'x', 4: 'y',
+                                5: 'D-Beast Rook  Adamon P'})
+    run = service._begin_clear(state)
+    assert run.bosses == frozenset({5})
+
+
+# 7 Nov (debugger-freeze spec): a hung read must not be logged as "ok" (s2d logged 60 s "ok").
+# A reader timeout becomes DebuggerFrozen (no recover() on the fake adapter): 7 Nov fallback.
+@pytest.mark.parametrize('error, outcome, raised', [
+    (TimeoutError(), 'error: DebuggerFrozen', 'DebuggerFrozen'),
+    (OSError('gone'), 'error: OSError', 'OSError')])
+def test_a_failed_act_read_logs_its_outcome(owned, tmp_path, error, outcome, raised):
+    import json
+    sim = phase_sim()
+
+    async def masks():
+        raise error
+
+    service, _, _ = make(owned, tmp_path, sim, read_menu_masks=masks)
+    with pytest.raises(Exception) as caught:
+        asyncio.run(service._act_io().menu_masks())
+    assert type(caught.value).__name__ == raised
+    lines = (tmp_path / 'evidence' / 'agent-navigation-inputs.jsonl').read_text().splitlines()
+    act_reads = [json.loads(x) for x in lines if '"act_read"' in x]
+    assert act_reads[-1]['outcome'] == outcome
+
+
+# 7 Nov (debugger-freeze spec, Part 4): s4-d handed over `cursor_budget` with a story dialogue up.
+@pytest.mark.parametrize('settled', [True, False])
+def test_a_cursor_budget_handover_settles_a_pending_dialogue_first(owned, tmp_path, monkeypatch,
+                                                                   settled):
+    import json
+
+    from psp_buddy import act as act_macro
+    from psp_buddy import info_navigation
+    calls = []
+
+    async def settle(io, **kw):
+        calls.append('settle')
+        return {'settled': settled, 'presses': 3}
+
+    monkeypatch.setattr(act_macro, 'settle_dialogue', settle)
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    service._goto_presses = info_navigation.MAX_GOTO_PRESSES
+    service._dialogue_pending = True
+    answer = asyncio.run(service.execute('turn_next', {'sequence': 1}))
+    assert answer['handover'] == {'reason': 'cursor_budget'} and calls == ['settle']
+    data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+    assert data['reason'] == 'cursor_budget'
+    assert data['screen_state'] == ('map' if settled else 'dialogue')
+    assert data.get('dialogue_pending', False) is (not settled)
+    assert service._dialogue_pending is (not settled)
+
+
+def test_a_cursor_budget_handover_without_a_dialogue_does_not_settle(owned, tmp_path, monkeypatch):
+    from psp_buddy import act as act_macro
+    from psp_buddy import info_navigation
+
+    async def settle(io, **kw):
+        raise AssertionError('no dialogue is pending')
+
+    monkeypatch.setattr(act_macro, 'settle_dialogue', settle)
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    service._goto_presses = info_navigation.MAX_GOTO_PRESSES
+    answer = asyncio.run(service.execute('turn_next', {'sequence': 1}))
+    assert answer['handover'] == {'reason': 'cursor_budget'}
+
+
+# ---- 7 Nov: debugger-freeze fallback (wait-and-retry, then a clean handover) ----------------
+
+def _hangs_once(result):
+    calls = []
+
+    async def reader(*a):
+        calls.append(a)
+        if len(calls) == 1:
+            await asyncio.sleep(30)
+        return result
+    return reader, calls
+
+
+def test_a_frozen_read_is_retried_once_after_the_adapter_recovers(owned, tmp_path, monkeypatch):
+    from psp_buddy import info_navigation
+    monkeypatch.setattr(info_navigation, 'READ_FREEZE_SECONDS', 0.05)
+    masks, calls = _hangs_once((1, 2))
+    service, adapter, _ = make(owned, tmp_path, phase_sim(), read_menu_masks=masks)
+    recovered = []
+
+    async def recover():
+        recovered.append(True)
+        return True
+    adapter.recover = recover
+    assert asyncio.run(service._act_io().menu_masks()) == (1, 2)
+    assert len(calls) == 2 and recovered == [True]
+
+
+def test_a_frozen_read_without_recovery_raises_debugger_frozen(owned, tmp_path, monkeypatch):
+    from psp_buddy import info_navigation
+    monkeypatch.setattr(info_navigation, 'READ_FREEZE_SECONDS', 0.05)
+    masks, calls = _hangs_once((1, 2))
+    service, adapter, _ = make(owned, tmp_path, phase_sim(), read_menu_masks=masks)
+
+    async def recover():
+        return False
+    adapter.recover = recover
+    with pytest.raises(info_navigation.DebuggerFrozen):
+        asyncio.run(service._act_io().menu_masks())
+    assert len(calls) == 1
+
+
+def test_a_press_that_times_out_is_a_debugger_freeze_and_is_never_repeated(owned, tmp_path):
+    from psp_buddy import info_navigation
+    service, adapter, _ = make(owned, tmp_path, phase_sim())
+    pressed = []
+
+    async def press(button, frames=2):
+        pressed.append(button)
+        raise TimeoutError()
+    adapter.press = press
+    with pytest.raises(info_navigation.DebuggerFrozen):
+        asyncio.run(service._act_io().press('down'))
+    assert pressed == ['down']
+
+
+def test_a_frozen_turn_next_hands_over_and_reads_nothing_after(owned, tmp_path, monkeypatch):
+    import json
+
+    from psp_buddy import info_navigation
+    monkeypatch.setattr(info_navigation, 'READ_FREEZE_SECONDS', 0.05)
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    calls = []
+
+    async def frozen(n):
+        calls.append(n)
+        await asyncio.sleep(30)
+    service._read_state = service._guard_reader(frozen)
+
+    async def scenario():
+        first = await service.execute('turn_next', {'sequence': 1})
+        assert first['handover'] == {'reason': 'debugger_frozen'}
+        assert first['unit_object'] is None and first['done'] is False
+        data = json.loads((tmp_path / 'evidence' / 'handover.json').read_text(encoding='utf-8'))
+        assert data['reason'] == 'debugger_frozen' and data['screen_state'] == 'unknown'
+        again = await service.execute('turn_next', {'sequence': 2})
+        assert again['handover'] == {'reason': 'debugger_frozen'}
+    asyncio.run(scenario())
+    assert len(calls) == 1 and adapter.sent == []
+
+
+@pytest.mark.parametrize('uncertain', [True, False])
+def test_only_a_debugger_timeout_becomes_a_frozen_handover(owned, tmp_path, uncertain):
+    # 7 Nov review: a TimeoutError from elsewhere must not be labelled debugger_frozen.
+    sim, _ = named_sim({})
+    service, adapter, frame = make(owned, tmp_path, sim)
+    adapter.uncertain = uncertain
+
+    async def times_out(n):
+        raise TimeoutError()
+    service._read_state = times_out           # unguarded on purpose
+    if uncertain:
+        answer = asyncio.run(service.execute('turn_next', {'sequence': 1}))
+        assert answer['handover'] == {'reason': 'debugger_frozen'}
+    else:
+        with pytest.raises(TimeoutError):
+            asyncio.run(service.execute('turn_next', {'sequence': 1}))

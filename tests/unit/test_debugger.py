@@ -430,3 +430,178 @@ def test_original_code_identity_pause_and_response_fail_closed(fault):
             else:
                 assert adapter.uncertain
     asyncio.run(scenario())
+
+
+# 7 Nov (debugger-freeze spec, Part 1): one trace record per debugger request.
+def traced_adapter(transport, **options):
+    from psp_buddy.debugger import DebuggerAdapter
+
+    adapter = DebuggerAdapter(transport, **options)
+    adapter.records = []
+    adapter.trace = adapter.records.append
+    return adapter
+
+
+def test_each_request_is_traced_with_event_ticket_seconds_and_ok():
+    async def scenario():
+        adapter = traced_adapter(FakeTransport())
+        await adapter.read_memory(0x08800000, 4)
+        [record] = adapter.records
+        assert record["event"] == "memory.read" and record["outcome"] == "ok"
+        assert record["ticket"] == "1" and record["seconds"] >= 0
+        assert isinstance(record["sent_ns"], int)
+    asyncio.run(scenario())
+
+
+def test_a_silent_request_is_traced_as_timeout_and_still_raises():
+    async def scenario():
+        transport = FakeTransport()
+        transport.silent.add("memory.read")
+        adapter = traced_adapter(transport, timeout_seconds=0.05)
+        with pytest.raises(TimeoutError):
+            await adapter.read_memory(0x08800000, 4)
+        assert [r["outcome"] for r in adapter.records] == ["timeout"]
+    asyncio.run(scenario())
+
+
+def test_an_error_reply_is_traced_with_its_type():
+    async def scenario():
+        transport = FakeTransport()
+        transport.error.add("memory.read")
+        adapter = traced_adapter(transport)
+        with pytest.raises(RuntimeError):
+            await adapter.read_memory(0x08800000, 4)
+        assert adapter.records[0]["outcome"] == "error: RuntimeError"
+    asyncio.run(scenario())
+
+
+def test_pause_and_status_polls_are_traced():
+    async def scenario():
+        adapter = traced_adapter(FakeTransport())
+        async with adapter.observation_pause():
+            pass
+        events = [r["event"] for r in adapter.records]
+        assert "cpu.stepping" in events and "cpu.resume" in events
+        assert events.count("cpu.status") >= 2
+    asyncio.run(scenario())
+
+
+def test_a_failing_trace_never_changes_the_request():
+    async def scenario():
+        from psp_buddy.debugger import DebuggerAdapter
+
+        adapter = DebuggerAdapter(FakeTransport())
+
+        def broken(record):
+            raise OSError("disk full")
+        adapter.trace = broken
+        assert await adapter.read_memory(0x08800000, 4) == b"abcd"
+        assert adapter.trace_errors == 1
+    asyncio.run(scenario())
+
+
+# 7 Nov (fallback fix): after a read/status timeout, recover() checks the link with cpu.status.
+def frozen_read_adapter(transport):
+    from psp_buddy.debugger import DebuggerAdapter
+
+    adapter = DebuggerAdapter(transport, timeout_seconds=0.05)
+    adapter.RECOVER_SECONDS = 0.05
+
+    async def freeze():
+        transport.silent.add("memory.read")
+        with pytest.raises(TimeoutError):
+            async with adapter.observation_pause():
+                await adapter.read_memory(0x08800000, 4)
+        transport.silent.discard("memory.read")
+    return adapter, freeze
+
+
+def test_recover_after_a_read_timeout_clears_uncertain_and_resumes_the_cpu():
+    async def scenario():
+        transport = FakeTransport()
+        adapter, freeze = frozen_read_adapter(transport)
+        await freeze()
+        assert adapter.uncertain and transport.stepping      # our pause was left in place
+        assert await adapter.recover() is True
+        assert not adapter.uncertain and not transport.stepping
+        assert await adapter.read_memory(0x08800000, 4) == b"abcd"
+    asyncio.run(scenario())
+
+
+def test_recover_fails_when_the_status_check_stays_silent():
+    async def scenario():
+        transport = FakeTransport()
+        adapter, freeze = frozen_read_adapter(transport)
+        await freeze()
+        transport.silent.add("cpu.status")
+        assert await adapter.recover() is False
+        assert adapter.uncertain
+    asyncio.run(scenario())
+
+
+def test_recover_never_clears_an_uncertain_press():
+    from psp_buddy.debugger import DebuggerAdapter
+
+    async def scenario():
+        transport = FakeTransport()
+        transport.silent.add("input.buttons.press")
+        adapter = DebuggerAdapter(transport, timeout_seconds=0.05)
+        adapter.RECOVER_SECONDS = 0.05
+        with pytest.raises(TimeoutError):
+            await adapter.press("down", 2)
+        assert await adapter.recover() is False
+        assert adapter.uncertain
+        assert not any(x["event"] == "cpu.status" for x in transport.sent)
+    asyncio.run(scenario())
+
+
+def test_recover_leaves_a_user_pause_alone():
+    async def scenario():
+        transport = FakeTransport()
+        adapter, freeze = frozen_read_adapter(transport)
+        await freeze()
+        transport.paused = True
+        assert await adapter.recover() is True
+        assert not any(x["event"] == "cpu.resume" for x in transport.sent)
+    asyncio.run(scenario())
+
+
+def test_recover_on_a_healthy_adapter_is_a_no_op():
+    from psp_buddy.debugger import DebuggerAdapter
+
+    async def scenario():
+        transport = FakeTransport()
+        assert await DebuggerAdapter(transport).recover() is True
+        assert transport.sent == []
+    asyncio.run(scenario())
+
+
+def test_a_pause_that_never_takes_effect_is_recoverable():
+    from psp_buddy.debugger import DebuggerAdapter
+
+    async def scenario():
+        transport = FakeTransport()
+        transport.silent.add("cpu.stepping")       # the CPU never reports stepping
+        adapter = DebuggerAdapter(transport, timeout_seconds=0.05)
+        adapter.RECOVER_SECONDS = 0.05
+        with pytest.raises(TimeoutError):
+            async with adapter.observation_pause():
+                pass
+        assert adapter.uncertain
+        assert await adapter.recover() is True and not adapter.uncertain
+    asyncio.run(scenario())
+
+
+def test_recover_bounds_the_resume_by_recover_seconds_not_the_adapter_timeout():
+    import time
+
+    async def scenario():
+        transport = FakeTransport()
+        adapter, freeze = frozen_read_adapter(transport)
+        await freeze()
+        adapter.timeout_seconds = 5           # live: 60 s from config.json
+        transport.silent.add("cpu.resume")    # the CPU never resumes
+        started = time.monotonic()
+        assert await adapter.recover() is False
+        assert time.monotonic() - started < 1
+    asyncio.run(scenario())

@@ -759,3 +759,26 @@ def test_the_retreat_clause_alone_reads_foe_reach():
     run(plan_act.plan_and_act(sim, parse_policy('move damaged units away from foes'), 1000,
                               foe_reach=cache))
     assert sim.foe_reads == 2 and set(cache) == {2000, 2001}
+
+
+class BigGrunt(Named):
+    """Mercurius has far more max HP than two other foes, so the HP rule alone makes it a boss."""
+    NAMES = {**Named.NAMES, 2002: 'Taurus'}
+
+    def __init__(self, **flags):
+        super().__init__(**flags)
+        far = next(u for u in self.units if u['object'] == 2001)
+        self.units.append({**far, 'object': 2002, 'tile_x': 30, 'tile_y': 30})   # out of reach
+        for u in self.units:
+            if u['object'] == 2000:
+                u['max_hp'] = 99999
+
+
+def test_boss_factor_zero_keeps_only_the_named_bosses():
+    from psp_buddy.policy import parse_policy
+    policy = parse_policy('target non-bosses before bosses')
+    by_hp = run(plan_act.plan_and_act(BigGrunt(), policy, 1000, boss_names=['Nobody']))
+    assert by_hp['plan']['act']['attack']['target_object'] == 2001
+    named = run(plan_act.plan_and_act(BigGrunt(), policy, 1000, boss_names=['Nobody'],
+                                      boss_factor=0))
+    assert named['plan']['act']['attack']['target_object'] == 2000

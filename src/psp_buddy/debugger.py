@@ -116,6 +116,11 @@ class DebuggerAdapter:
     # silent for 60 s; before, the PowerShell identity check kept them >= ~0.5 s apart.
     PRESS_GAP_SECONDS = 0.2
     RESUME_GAP_SECONDS = 0.1
+    # 7 Nov (debugger-freeze fallback): recover() asks cpu.status this often, this long each.
+    RECOVER_TRIES = 2
+    RECOVER_SECONDS = 10.0
+    # Requests whose lost reply cannot have changed the game: only these may be recovered.
+    RECOVERABLE_EVENTS = frozenset({"memory.read", "cpu.status", "cpu.stepping", "cpu.resume"})
 
     def __init__(self, transport: Transport, *, timeout_seconds: float = 10) -> None:
         if (isinstance(timeout_seconds, bool) or not math.isfinite(timeout_seconds)
@@ -136,6 +141,10 @@ class DebuggerAdapter:
         self._clock: Callable[[], float] = time.monotonic
         self._gap_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
         self._quiet_until = 0.0         # no new pause before this clock time
+        # 7 Nov (debugger-freeze spec): one record per request, so a freeze names its request.
+        self.trace: Callable[[dict[str, object]], None] | None = None
+        self.trace_errors = 0
+        self._uncertain_event: str | None = None   # the request whose failure set `uncertain`
 
     @classmethod
     async def connect_live(cls, session: object) -> "DebuggerAdapter":
@@ -209,6 +218,31 @@ class DebuggerAdapter:
     async def _exchange(self, event: str, params: Mapping[str, object], *,
                         original_code: bool = False,
                         render_capture: bool = False) -> dict[str, object]:
+        note: dict[str, object] = {}
+        sent_ns = time.monotonic_ns()
+        outcome = "ok"
+        try:
+            return await self._exchange_untraced(event, params, note,
+                                                 original_code=original_code,
+                                                 render_capture=render_capture)
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        except BaseException as exc:
+            outcome = f"error: {type(exc).__name__}"
+            raise
+        finally:
+            if self.trace is not None:
+                try:
+                    self.trace({"event": event, "ticket": note.get("ticket"), "sent_ns": sent_ns,
+                                "seconds": round((time.monotonic_ns() - sent_ns) / 1e9, 3),
+                                "outcome": outcome})
+                except Exception:
+                    self.trace_errors += 1
+
+    async def _exchange_untraced(self, event: str, params: Mapping[str, object],
+                                 note: dict[str, object], *, original_code: bool,
+                                 render_capture: bool) -> dict[str, object]:
         if render_capture:
             self._render_scope()
             if event != "gpu.buffer.renderColor" or dict(params) != {"type": "uri"}:
@@ -238,6 +272,7 @@ class DebuggerAdapter:
                 raise RuntimeError("transport outcome uncertain; further actions prohibited")
             self._ticket += 1
             ticket = str(self._ticket)
+            note["ticket"] = ticket
             try:
                 async with asyncio.timeout(self.timeout_seconds):
                     if ((original_code or render_capture or event in {
@@ -275,9 +310,43 @@ class DebuggerAdapter:
                         self.events.append(message)
             except (TimeoutError, ConnectionError, OSError, asyncio.CancelledError,
                     ValueError):
+                if not self.uncertain:
+                    self._uncertain_event = event
                 self.uncertain = True
                 self.pause_status = None
                 raise
+
+    async def recover(self) -> bool:
+        """After a read or status request went unanswered (s2d, 6 Nov: the debugger was silent
+        for 60 s after a press), check the link with cpu.status. If it answers, clear
+        `uncertain` and resume a CPU our abandoned pause left stepping (a user pause stays).
+        Never after a press or button release: its effect on the game is unknown."""
+        if not self.uncertain:
+            return True
+        if (self._uncertain_event not in self.RECOVERABLE_EVENTS or self._held
+                or self._pause_owner is not None):
+            return False
+        for _ in range(self.RECOVER_TRIES):
+            try:
+                async with asyncio.timeout(self.RECOVER_SECONDS):
+                    stepping, paused = await self.status()
+                break
+            except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
+                continue
+        else:
+            return False
+        self.uncertain = False
+        self._uncertain_event = None
+        if stepping and not paused:
+            try:
+                # Bounded like the status checks (7 Nov review): the full adapter timeout could
+                # outlast the helper's 120 s operation limit.
+                async with asyncio.timeout(self.RECOVER_SECONDS):
+                    await self._transition("cpu.resume", False)
+            except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
+                return False
+            self._quiet_until = max(self._quiet_until, self._clock() + self.RESUME_GAP_SECONDS)
+        return True
 
     async def request(self, event: str, params: Mapping[str, object]) -> dict[str, object]:
         """Validated public seam; state-changing controls use scoped methods only."""
@@ -396,6 +465,8 @@ class DebuggerAdapter:
                         return
                     await asyncio.sleep(0.005)
         except BaseException:
+            if not self.uncertain:
+                self._uncertain_event = event     # a pause/resume that never took effect
             self.uncertain = True
             self.pause_status = None
             raise

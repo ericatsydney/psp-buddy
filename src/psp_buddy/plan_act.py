@@ -24,7 +24,15 @@ from typing import Any, cast
 from . import act, press_budget, spirit_cast, targets
 from .models import Policy
 from .spirits import choose_spirit
-from .tactics import BOSS_NAMES, SAFE_SPIRITS, boss_objects, foe_reach_of, plan_attack, spirited
+from .tactics import (
+    BOSS_HP_FACTOR,
+    BOSS_NAMES,
+    SAFE_SPIRITS,
+    boss_objects,
+    foe_reach_of,
+    plan_attack,
+    spirited,
+)
 
 MIN_HIT = 1
 MAX_REPLANS = 2          # extra plans after the game refuses a weapon (greyed, out of reach)
@@ -179,6 +187,7 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        hits: Mapping[int, int] | None = None,
                        damage_log: Path | None = None,
                        boss_names: Collection[str] | None = None,
+                       boss_factor: float = BOSS_HP_FACTOR,
                        mech_names: dict[int, str] | None = None,
                        settle_first: bool = False,
                        protected: Collection[int] = frozenset(),
@@ -191,7 +200,8 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
 
     With `boss_names` (or `non_boss_first`, which defaults them to `tactics.BOSS_NAMES`) the
     living foes' mech names are read once into `mech_names` (a per-trial cache) and
-    `tactics.boss_objects` adds the named and high-max-HP foes to `bosses`.
+    `tactics.boss_objects` adds the named and high-max-HP foes to `bosses` (`boss_factor` 0:
+    the named ones only).
 
     Never raises for game, read or input problems: an exception would make the handoff disable
     itself with the emulator on an open menu, so every failure becomes a report.
@@ -216,7 +226,7 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                 mech_names = {}
             bosses = set(bosses) | await _bosses(
                 io, boss_names, mech_names,
-                foe_reach if policy.max_foes_in_reach is not None else None)
+                foe_reach if policy.max_foes_in_reach is not None else None, boss_factor)
         answer = await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log,
                                      notes, spirit_skip, foe_reach, mech_names)
     except act.ActIOError as exc:
@@ -371,7 +381,8 @@ async def _foe_reach(io: act.ActIO, state: Mapping[str, Any], cache: dict[int, i
 
 
 async def _bosses(io: act.ActIO, names: Collection[str], cache: dict[int, str],
-                  reach: dict[int, int] | None = None) -> frozenset[int]:
+                  reach: dict[int, int] | None = None,
+                  factor: float = BOSS_HP_FACTOR) -> frozenset[int]:
     """Named or high-max-HP foes; a foe whose name cannot be read counts by max HP only."""
     state = await io.state()
     units: list[Mapping[str, Any]] = state.get("units", [])     # type: ignore[assignment]
@@ -380,7 +391,7 @@ async def _bosses(io: act.ActIO, names: Collection[str], cache: dict[int, str],
         if (targets.is_foe(unit.get("raw_menu_group_byte")) and type(obj) is int
                 and obj not in cache):
             await _read_foe(io, obj, cache, reach)
-    return boss_objects(units, cache, names)
+    return boss_objects(units, cache, names, factor)
 
 
 async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
