@@ -705,7 +705,7 @@ class InfoNavigation:
             boss_factor=0 if self._boss_names else BOSS_HP_FACTOR,
             mech_names=self._mech_names, settle_first=self._dialogue_pending,
             protected=frozenset(guarded), spirit_skip=self._spirit_skip,
-            foe_reach=self._foe_reach)
+            foe_reach=self._foe_reach, range_log=self._evidence / "rejected-ranges.jsonl")
         self._act_pending = None
         done = outcome.get("outcome")
         self._bonus_unit = (unit_object if isinstance(done, Mapping) and done.get("bonus_action")

@@ -24,6 +24,7 @@ DESTINY = {
                  + '8a89ec088c89ec088e89ec089089ec089289ec08'),
     0x08E6AA78: 'dc9dc7086089ea08',                                     # pilot descriptor
     0x08EA89EE: '24010c05090116010201000000000000',                     # pilot skills (+0x8E)
+    0x08EA8974: '0000' + '00' * 0x30 + '6400',              # effects +0x14 .. will +0x46
     0x08C99750: ('f83bfa08103cfa0840006c070102190000000a00000101010201000000000000'
                  '090000000000000001000000'),
     0x08FA3BF8: '8250825681448254828d828d826282688276827200',
@@ -66,6 +67,7 @@ Z_GUNDAM_LIST = {
                  + '3c7dec083e7dec08407dec08427dec08447dec08'),
     0x08E6A828: 'f692c708a857ea08',
     0x08EA5836: '22040d050b0100000000000000000000',
+    0x08EA57BC: '0000' + '00' * 0x30 + '6400',              # effects +0x14 .. will +0x46
     0x08C959F8: ('3751a2083751a2084000d00701021e000a000a00000101010101000000000000'
                  '090000000000000001000000'),
     0x08A25137: '82758295828c82838281828e82628281828e828e828f828e00',
@@ -270,3 +272,57 @@ def test_high_newtype_level_marks_range_unresolved():
     # Pilot skill 34 (Newtype-like) at level 7+ can add range for some weapons: not modelled.
     unit, _ = probe(DESTINY, 0x091C02D0, {0x08EA89EE: bytes([34, 8])})
     assert all(w['range_bonus_resolved'] is False for w in unit['weapons'])
+
+
+# Effective move (11 Nov): the game's move function 0x0896A090 adds +3 for effect mask 0x80 and
+# Dash (pilot skill 21): +1, +2 at will 130 or more. Destiny's stored move (runtime +0x15) is 7.
+DESTINY_EFFECTS = 0x08EA8974                        # pilot runtime 0x08EA8960 + 0x14
+DESTINY_WILL = 0x08EA89A6                           # pilot runtime + 0x46
+DESTINY_FIRST_SKILL = 0x08EA89EE                    # pilot runtime + 0x8E
+
+
+def move_of(**overrides):
+    unit, memory = probe(DESTINY, 0x091C02D0, overrides)
+    return unit, memory
+
+
+def test_move_without_dash_or_flag_is_the_stored_value():
+    unit, _ = move_of()
+    assert (unit['move'], unit['stored_move'], unit['move_bonus']) == (7, 7, 0)
+
+
+@pytest.mark.parametrize('will,expected', [(100, 8), (129, 8), (130, 9), (150, 9)])
+def test_dash_adds_one_and_two_from_will_130(will, expected):
+    unit, _ = probe(DESTINY, 0x091C02D0, {DESTINY_FIRST_SKILL: bytes([21, 1]),
+                                          DESTINY_WILL: will.to_bytes(2, 'little')})
+    assert unit['move'] == expected and unit['stored_move'] == 7
+    assert unit['move_bonus'] == expected - 7
+
+
+def test_the_move_effect_flag_adds_three_and_stacks_with_dash():
+    unit, _ = probe(DESTINY, 0x091C02D0, {DESTINY_EFFECTS: bytes([0x80, 0])})
+    assert unit['move'] == 10
+    unit, _ = probe(DESTINY, 0x091C02D0, {DESTINY_EFFECTS: bytes([0x80, 0]),
+                                          DESTINY_FIRST_SKILL: bytes([21, 1]),
+                                          DESTINY_WILL: (130).to_bytes(2, 'little')})
+    assert unit['move'] == 12 and unit['move_bonus'] == 5
+
+
+def test_other_effects_and_a_dash_byte_with_level_zero_add_nothing():
+    unit, _ = probe(DESTINY, 0x091C02D0, {DESTINY_EFFECTS: bytes([0x44, 0x7F]),     # Sense, others
+                                          DESTINY_FIRST_SKILL: bytes([21, 0])})
+    assert unit['move'] == 7 and unit['move_bonus'] == 0
+
+
+def test_without_a_readable_pilot_the_move_is_the_stored_value():
+    unit, memory = probe(DESTINY, 0x091C02D0, {0x08E6AA7C: bytes(4)})     # pilot runtime null
+    assert (unit['move'], unit['move_bonus']) == (7, 0)
+    assert all(address != DESTINY_EFFECTS for address, _ in memory.reads)
+
+
+def test_a_pilot_runtime_whose_effects_block_is_outside_ram_counts_as_no_pilot():
+    # RAM_START - 0x20: +0x8E is inside user RAM, but +0x14 is not, so the pilot is unreadable.
+    runtime = (0x08800000 - 0x20).to_bytes(4, 'little')
+    unit, memory = probe(DESTINY, 0x091C02D0, {0x08E6AA7C: runtime})
+    assert unit['pilot_skills'] is None and unit['move_bonus'] == 0 and unit['move'] == 7
+    assert len(unit['weapons']) == 5

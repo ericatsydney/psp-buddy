@@ -16,7 +16,7 @@ FOE_GROUP = 12
 # held_turn_one (M16): a pilot without Focus/Sense stays unmoved on turn 1.
 # retreat_stay (M16, m16-i): a damaged unit with no safer tile casts and stays.
 SKIP_HANDOVERS = ("no_target", "retreat_needed", "unit_not_ready", "unit_not_ally", "protected",
-                  "cursor_budget", "held_turn_one", "retreat_stay")
+                  "cursor_budget", "held_turn_one", "retreat_stay", "move_range_unreadable")
 # act stages before the Move and the Start press: a failure there backs out and changes nothing.
 BEFORE_ACTION_STAGES = ("plan", "select", "attack_menu", "weapon", "target", "forecast")
 
@@ -47,6 +47,22 @@ def ready_allies(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return sorted(ready, key=lambda u: (distance(u), u["object"]))
 
 
+def _range_source(result: Mapping[str, Any]) -> str | None:
+    """Where a move's range came from, when it was not the cost byte (stop-byte spec): the act's
+    own move record first (it can fall back on its own), else the plan's expectation."""
+    outcome = result.get("outcome")
+    stages = outcome.get("stages") if isinstance(outcome, Mapping) else None
+    for stage in stages if isinstance(stages, list) else []:
+        facts = stage.get("facts") if isinstance(stage, Mapping) else None
+        if (stage.get("stage") == "move" and isinstance(facts, Mapping)
+                and isinstance(facts.get("range_source"), str)):
+            return str(facts["range_source"])
+    plan = result.get("plan")
+    expect = plan.get("expect") if isinstance(plan, Mapping) else None
+    source = expect.get("range_source") if isinstance(expect, Mapping) else None
+    return source if isinstance(source, str) else None
+
+
 class TurnLog:
     def __init__(self) -> None:
         self.skipped: dict[int, str] = {}
@@ -65,7 +81,11 @@ class TurnLog:
             "target": attack.get("target_object"), "hit": forecast.get("hit"),
             "moved": bool(result.get("moved")), "deltas": done.get("deltas", []),
             **({"spirit": result["spirit"]} if "spirit" in result else {}),
-            **({"bonus_action": True} if done.get("bonus_action") else {})})
+            **({"bonus_action": True} if done.get("bonus_action") else {}),
+            **({"range_source": source} if (source := _range_source(result)) else {}),
+            # An act stop's own record (press count, memory trace), kept for diagnosis.
+            **({"stop_facts": done["facts"]} if done.get("ok") is False
+               and isinstance(done.get("facts"), Mapping) and done["facts"] else {})})
         if outcome == "skipped":
             self.skipped[unit_object] = str(reason)
         elif outcome == "stop" and self.stopped is None:

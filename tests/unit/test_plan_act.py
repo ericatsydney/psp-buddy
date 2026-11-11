@@ -2,7 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from test_act import SimGame
+from test_act import SimGame, StopByteMixin
 
 from psp_buddy import act, plan_act
 from psp_buddy.models import Policy
@@ -162,8 +162,127 @@ def test_overlay_not_centred_on_the_unit_means_no_move_plan():
     sim = Game(range_stale=True)
     sim.units[2]['tile_y'] = 12
     result = run(plan_act.plan_and_act(sim, POLICY, 1000))
-    assert result == {'ok': False, 'phase': 'handover', 'reason': 'no_target'}
+    assert result == {'ok': False, 'phase': 'handover', 'reason': 'move_range_unreadable'}
     assert sim.screen == 'map' and 'start' not in sim.log
+
+
+def stale_game(cls=Game):
+    sim = cls(range_stale=True)
+    sim.units[2]['tile_y'] = 12
+    return sim
+
+
+def test_a_rejected_move_range_is_logged_and_the_run_is_unchanged(tmp_path: Path):
+    log = tmp_path / 'rejected-ranges.jsonl'
+    plain = stale_game()
+    run(plan_act.plan_and_act(plain, POLICY, 1000))
+    sim = stale_game()
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=log))
+    assert result == {'ok': False, 'phase': 'handover', 'reason': 'move_range_unreadable'}
+    assert sim.log == plain.log and sim.screen == 'map'
+    record = json.loads(log.read_text(encoding='utf-8'))
+    assert record['unit'] == 1000 and record['tile'] == [5, 5] and record['tiles'] == 2
+    assert record['problems'] == ['cost_1_not_adjacent', 'cost_below_distance']
+    assert record['turn'] == {'turn': 7} and record['cursor'] == {'x': 5, 'y': 5}
+
+
+def test_a_rejected_move_range_records_the_open_menu(tmp_path: Path):
+    class Menus(Game):
+        async def command_menu(self):
+            return 2, 5
+
+        async def menu_masks(self):
+            return 31, 3
+
+    log = tmp_path / 'rejected-ranges.jsonl'
+    run(plan_act.plan_and_act(stale_game(Menus), POLICY, 1000, range_log=log))
+    record = json.loads(log.read_text(encoding='utf-8'))
+    assert record['command_menu'] == [2, 5] and record['menu_masks'] == [31, 3]
+
+
+def test_an_unreadable_menu_still_logs_the_range_and_backs_out(tmp_path: Path):
+    class Broken(Game):
+        async def command_menu(self):
+            raise act.ActIOError('no answer')
+
+    log = tmp_path / 'rejected-ranges.jsonl'
+    sim = stale_game(Broken)
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=log))
+    assert result['reason'] == 'move_range_unreadable' and sim.screen == 'map'
+    assert json.loads(log.read_text(encoding='utf-8'))['command_menu'] == 'unreadable'
+
+
+def test_an_accepted_move_range_writes_no_log(tmp_path: Path):
+    log = tmp_path / 'rejected-ranges.jsonl'
+    sim = Game()
+    sim.units[2]['tile_y'] = 12
+    run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=log))
+    assert 'cross' in sim.log or 'start' in sim.log
+    assert not log.exists()
+
+
+def test_an_unwritable_range_log_is_reported_and_changes_nothing_else(tmp_path: Path):
+    sim = stale_game()
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=tmp_path))   # a directory
+    assert result['reason'] == 'move_range_unreadable' and 'range_log_error' in result
+    assert sim.screen == 'map'
+
+
+class StopGame(StopByteMixin, Game):
+    pass
+
+
+ADVANCE = parse_policy('advance toward foes when none is in reach')
+
+
+def test_a_stop_byte_unit_advances_and_waits_instead_of_being_skipped():
+    sim = StopGame()
+    sim.units[2]['tile_y'] = 12                 # 7 tiles away: out of reach from its own tile
+    result = run(plan_act.plan_and_act(sim, ADVANCE, 1000))
+    assert result['ok'] is True and result['phase'] == 'advanced' and result['standby'] is True
+    assert result['plan']['expect']['range_source'] == 'stop_byte'
+    assert 'attack' not in result['plan']['act'] and 'start' not in sim.log
+    assert sim.units[0]['tile_y'] == 8 and sim.screen == 'map'
+
+
+def test_a_valid_stop_byte_range_with_nothing_closer_stays_no_target():
+    sim = StopGame()
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, POLICY, 1000))      # this policy does not advance
+    assert result == {'ok': False, 'phase': 'handover', 'reason': 'no_target'}
+
+
+def test_no_cost_range_and_no_stop_byte_range_is_reported_as_unreadable():
+    sim = StopGame()
+    sim.stop_marks = False
+    sim.units[2]['tile_y'] = 12
+    result = run(plan_act.plan_and_act(sim, ADVANCE, 1000))
+    assert result == {'ok': False, 'phase': 'handover', 'reason': 'move_range_unreadable'}
+    assert sim.screen == 'map' and sim.units[0]['tile_y'] == 5
+
+
+def test_the_rejected_range_log_counts_the_stop_byte_tiles(tmp_path: Path):
+    log = tmp_path / 'rejected-ranges.jsonl'
+    sim = StopGame()
+    sim.units[2]['tile_y'] = 12
+    run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=log))
+    record = json.loads(log.read_text(encoding='utf-8'))
+    assert record['problems'] == ['empty'] and record['stop_tiles'] == 24
+    assert record['stop_range_valid'] is True
+
+
+def test_the_rejected_range_log_lists_the_stop_tiles_and_the_read_move(tmp_path: Path):
+    # s2n: a count alone could not tell a short move read from marks left by another unit.
+    log = tmp_path / 'rejected-ranges.jsonl'
+    sim = StopGame()
+    sim.units[2]['tile_y'] = 12
+    run(plan_act.plan_and_act(sim, POLICY, 1000, range_log=log))
+    record = json.loads(log.read_text(encoding='utf-8'))
+    assert isinstance(record['move'], int)
+    assert len(record['stop_cells']) == 24
+    assert all(len(cell) == 2 for cell in record['stop_cells'])
+    distances = [abs(x - 5) + abs(y - 5) for x, y in record['stop_cells']]
+    assert 0 < min(distances) and max(distances) <= record['move']
 
 
 def test_overlay_is_skipped_when_there_is_no_time_to_move_and_fire():

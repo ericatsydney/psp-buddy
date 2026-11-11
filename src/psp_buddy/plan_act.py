@@ -21,7 +21,7 @@ from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from . import act, press_budget, spirit_cast, targets
+from . import act, battle_state, press_budget, spirit_cast, targets
 from .models import Policy
 from .spirits import choose_spirit
 from .tactics import (
@@ -139,11 +139,64 @@ def forecast_gate(instruction: Mapping[str, Any], outcome: Mapping[str, Any],
     return None
 
 
-async def _open_move_range(io: act.ActIO, unit_object: int) -> Mapping[str, object]:
+async def _menu_read(io: act.ActIO, name: str) -> object:
+    """One optional menu read for the rejected-range log: None without it, never raises."""
+    reader = getattr(io, name, None)
+    if reader is None:
+        return None
+    try:
+        return await reader()
+    except act.ActIOError:
+        return "unreadable"
+
+
+def _range_readable(state: Mapping[str, Any], unit_object: int, move: object) -> bool:
+    """The Move window gave this unit a centred costed range or a valid stop-byte range."""
+    unit = next((u for u in state.get("units", []) if u.get("object") == unit_object), None)
+    if unit is None:
+        return False
+    tile = [unit["tile_x"], unit["tile_y"]]
+    return act.centered(tile, act._reachable(state)) or bool(act.stop_range(tile, state, move))
+
+
+async def _log_rejected_range(io: act.ActIO, path: Path, unit: Mapping[str, Any],
+                              state: Mapping[str, Any], mech_name: object,
+                              notes: dict[str, Any], move: object) -> None:
+    """What memory shows while a Move range that `act.centered` refused is still up (s2k, 10 Nov:
+    8 such skips, cause unknown). Reads only: it never presses and never changes the plan."""
+    try:
+        tile = [unit["tile_x"], unit["tile_y"]]
+        rows = act._reachable(state)
+        problems = act.range_problems(tile, rows)
+        if not problems:
+            return
+        grid = state.get("map")
+        stop_rows = grid.get("stop_rows") if isinstance(grid, Mapping) else None
+        stop_cells = (sorted([x, y] for x, y in battle_state.stop_tiles({"stop_rows": stop_rows}))
+                      if isinstance(stop_rows, list) else [])
+        record = {"unit": unit["object"], "mech_name": mech_name, "tile": tile, "move": move,
+                  "stop_tiles": len(stop_cells), "stop_cells": stop_cells,
+                  "stop_range_valid": bool(act.stop_range(tile, state, move)),
+                  "problems": problems, "tiles": len(rows), "turn": state.get("turn"),
+                  "cursor": state.get("cursor"), "screen": state.get("screen"),
+                  "ui_windows": state.get("ui_windows"),
+                  "cost_rows": grid.get("cost_rows") if isinstance(grid, Mapping) else None,
+                  "command_menu": await _menu_read(io, "command_menu"),
+                  "menu_masks": await _menu_read(io, "menu_masks")}
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        notes["range_log_error"] = repr(exc)
+
+
+async def _open_move_range(io: act.ActIO, unit_object: int, range_log: Path | None = None,
+                           mech_name: object = None, notes: dict[str, Any] | None = None,
+                           move: object = None) -> Mapping[str, object]:
     """Select the unit and show its Move range, read the state, close the menus again.
 
     Whether the range really is this unit's is checked by `tactics` (centred overlay), so a menu
-    that did not open yields no move plan instead of a wrong one.
+    that did not open yields no move plan instead of a wrong one. With `range_log`, a range that
+    check would refuse is logged before the menus close.
     """
     state: Mapping[str, Any] = await io.state()
     unit = next((u for u in state.get("units", []) if u.get("object") == unit_object), None)
@@ -157,7 +210,11 @@ async def _open_move_range(io: act.ActIO, unit_object: int) -> Mapping[str, obje
         await io.sleep(0.8)
         await io.press("circle", 2)
         await io.sleep(0.8)
-        return await act.range_when_drawn(io, [unit["tile_x"], unit["tile_y"]])
+        drawn = await act.range_when_drawn(io, [unit["tile_x"], unit["tile_y"]])
+        if range_log is not None:
+            await _log_rejected_range(io, range_log, unit, drawn, mech_name,
+                                      {} if notes is None else notes, move)
+        return drawn
     finally:
         await _back_out(io, 2)
 
@@ -192,7 +249,8 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                        settle_first: bool = False,
                        protected: Collection[int] = frozenset(),
                        spirit_skip: set[str] | None = None,
-                       foe_reach: dict[int, int] | None = None) -> dict[str, Any]:
+                       foe_reach: dict[int, int] | None = None,
+                       range_log: Path | None = None) -> dict[str, Any]:
     """One planned, gated attack for `unit_object`.
 
     A `protected` unit (M12: an ally lost in an earlier attempt) is left alone with no input: it
@@ -228,7 +286,7 @@ async def plan_and_act(io: act.ActIO, policy: Policy, unit_object: int, *,
                 io, boss_names, mech_names,
                 foe_reach if policy.max_foes_in_reach is not None else None, boss_factor)
         answer = await _plan_and_act(io, policy, unit_object, bosses, min_hit, hits, damage_log,
-                                     notes, spirit_skip, foe_reach, mech_names)
+                                     notes, spirit_skip, foe_reach, mech_names, range_log)
     except act.ActIOError as exc:
         answer = {"ok": False, "phase": "failed", "stage": "io", "reason": f"io_error: {exc}"}
     except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
@@ -399,7 +457,8 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
                         damage_log: Path | None, notes: dict[str, Any],
                         spirit_skip: set[str] | None = None,
                         foe_reach: dict[int, int] | None = None,
-                        mech_names: dict[int, str] | None = None) -> dict[str, Any]:
+                        mech_names: dict[int, str] | None = None,
+                        range_log: Path | None = None) -> dict[str, Any]:
     state = await io.state()
     weapons = await io.read_weapons(unit_object)
     reach = (await _foe_reach(io, state, foe_reach, mech_names)
@@ -420,9 +479,14 @@ async def _plan_and_act(io: act.ActIO, policy: Policy, unit_object: int,
         plan = plan_attack(state, weapons, policy, unit_object, bosses=bosses, hits=hits,
                            exclude=excluded, turn=turn, spirited=is_spirited, foe_reach=reach)
         if plan.get("reason") == "no_target" and io.time_left() >= OVERLAY_NEEDS:
-            plan = plan_attack(await _open_move_range(io, unit_object), weapons, policy,
-                               unit_object, bosses=bosses, hits=hits, exclude=excluded,
-                               turn=turn, spirited=is_spirited, foe_reach=reach)
+            drawn = await _open_move_range(io, unit_object, range_log, weapons.get("mech_name"),
+                                           notes, weapons.get("move"))
+            plan = plan_attack(drawn, weapons, policy, unit_object, bosses=bosses, hits=hits,
+                               exclude=excluded, turn=turn, spirited=is_spirited,
+                               foe_reach=reach)
+            if plan.get("reason") == "no_target" and not _range_readable(
+                    drawn, unit_object, weapons.get("move")):
+                plan = {"handover": True, "reason": "move_range_unreadable"}
         # M16 (m16-i): a damaged unit casts Focus/Sense before it moves away or stays; a retreat
         # move is checked against the cursor budget first, so a refusal presses nothing.
         planned = plan.get("expect")

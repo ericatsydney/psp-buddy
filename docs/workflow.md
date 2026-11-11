@@ -17,6 +17,13 @@ the scope when evidence is offline or human-controlled. Do not estimate a comple
 percentage from test counts. At session end update progress and leave an exact resume
 step with evidence pointers in the handover. No dashboard or scheduled report required.
 
+## New requirements: conflict gate
+
+Agreed 8 November 2026. Brainstorm -> spec and plan -> gstack `/plan-eng-review` of that
+spec and plan against the register in `docs/features.md` -> challenge the user on each
+conflict and record the decisions in the spec's `## Conflict review` section -> user
+reviews the spec -> implement -> update `docs/features.md`. Full steps are in AGENTS.md ("New-requirement flow").
+
 ## Reduce effort
 
 - Consult retained evidence before repeating discovery or asking for another screenshot.

@@ -425,12 +425,12 @@ class Launcher:
                                   ((receipt.snapshot_root, inventory(receipt.snapshot_root)),)
                                   + (() if archive is None else ((archive, prior_entries),)))
         self._issued[id(prepared)] = prepared
-        # Old copies nothing reads again (user, 7 Nov): keep the newest few, never block a launch.
-        working = retention.prune_working_copies(config.backup_root, protect=trial)
-        archives = (retention.prune_runtime_archives(runtime_root, protect=archive)
-                    if runtime_root is not None else retention.PruneResult())
-        self.last_prune = retention.PruneResult(working.removed + archives.removed,
-                                                working.failed + archives.failed)
+        # Keep the newest 5 backup cycles (user, 10 Nov); pruning never blocks a launch.
+        self.last_prune = (
+            retention.prune_backup_cycles(
+                config.backup_root.parent, protect=trial,
+                never=() if runtime_root is None else (runtime_root,))
+            if config.backup_root.name == "verified-snapshots" else retention.PruneResult())
         return prepared
 
     def start(self, prepared: PreparedLaunch) -> LaunchSession:

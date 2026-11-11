@@ -125,13 +125,27 @@ def menu_row(weapons: Sequence[Mapping[str, Any]], chosen: Mapping[str, Any],
     return row
 
 
+def range_problems(tile: Sequence[int], reachable: Sequence[Sequence[int]]) -> list[str]:
+    """Why a Move range is not centred on `tile`; empty when it is."""
+    cost = {(x, y): c for x, y, c in reachable}
+    if not cost:
+        return ["empty"]
+    near = [pos for pos, c in cost.items() if c == 1]
+    problems: list[str] = []
+    if (tile[0], tile[1]) in cost:
+        problems.append("own_tile_in_range")
+    if not near:
+        problems.append("no_cost_1_tile")
+    elif not all(abs(x - tile[0]) + abs(y - tile[1]) == 1 for x, y in near):
+        problems.append("cost_1_not_adjacent")
+    if not all(c >= abs(x - tile[0]) + abs(y - tile[1]) for (x, y), c in cost.items()):
+        problems.append("cost_below_distance")
+    return problems
+
+
 def centered(tile: Sequence[int], reachable: Sequence[Sequence[int]]) -> bool:
     """A fresh Move range is centred on the unit; stale costs from another unit fail this."""
-    cost = {(x, y): c for x, y, c in reachable}
-    near = [pos for pos, c in cost.items() if c == 1]
-    return (bool(cost) and (tile[0], tile[1]) not in cost and bool(near)
-            and all(abs(x - tile[0]) + abs(y - tile[1]) == 1 for x, y in near)
-            and all(c >= abs(x - tile[0]) + abs(y - tile[1]) for (x, y), c in cost.items()))
+    return not range_problems(tile, reachable)
 
 
 def _units(state: Mapping[str, object]) -> list[dict[str, object]]:
@@ -158,6 +172,21 @@ def _reachable(state: Mapping[str, object]) -> list[list[int]]:
             raw = [[t["x"], t["y"], t["cost"]]
                    for t in battle_state.reachable_tiles({"cost_rows": grid["cost_rows"]})]
     return [[int(x), int(y), int(c)] for x, y, c in (raw or [])]
+
+
+def stop_range(tile: Sequence[int], state: Mapping[str, object], move: object) -> list[list[int]]:
+    """Tiles the unit can stop on when the cost byte stayed empty (cell byte 2, s2m 10 Nov), as
+    [x, y, distance], or [] unless it can be trusted: Move window up, a readable move stat, and
+    every marked tile within that many tiles of the unit, its own tile not marked. Distance is
+    not the real cost: it only breaks ties between destinations, so no attack may rely on it."""
+    grid = state.get("map")
+    rows = grid.get("stop_rows") if isinstance(grid, Mapping) else None
+    if (_reachable(state) or state.get("screen") != "move_range" or type(move) is not int
+            or move < 1 or not isinstance(rows, list)):
+        return []
+    found = [[x, y, abs(x - tile[0]) + abs(y - tile[1])]
+             for x, y in battle_state.stop_tiles({"stop_rows": rows})]
+    return found if found and all(0 < distance <= move for _, _, distance in found) else []
 
 
 def _deltas(before: Sequence[Mapping[str, object]],
@@ -322,9 +351,19 @@ class _Run:
         await self.tap("circle")
         self.depth = 2
         await self.io.sleep(0.8)
-        reachable = _reachable(await range_when_drawn(self.io, here))
+        drawn = await range_when_drawn(self.io, here)
+        reachable = _reachable(drawn)
+        fallback = False
         if not centered(here, reachable):
-            raise _Stop("move", "range_not_centered_on_unit", retreat=self.depth)
+            if self.attack is None:     # user, 10 Nov: no attack rests on a stop-byte range
+                try:
+                    read = await self.steady(lambda: self.io.read_weapons(self.unit_object))
+                except ActIOError:      # the Move window is open: refuse below, which backs out
+                    read = {}
+                reachable = stop_range(here, drawn, read.get("move"))
+                fallback = bool(reachable)
+            if not fallback:
+                raise _Stop("move", "range_not_centered_on_unit", retreat=self.depth)
         if (self.move_to[0], self.move_to[1]) not in {(x, y) for x, y, _ in reachable}:
             raise _Stop("move", "destination_not_reachable", {"tiles": len(reachable)},
                         retreat=self.depth)
@@ -361,12 +400,15 @@ class _Run:
         self.depth = 0
         old = _find(before, self.unit_object)
         assert old is not None
-        if not (isinstance(moved.get("en"), int) and moved["en"] < old["en"]):  # type: ignore[operator]
+        # A stop-byte unit's cost byte is empty, so nothing shows that its move costs EN.
+        if not fallback and not (
+                isinstance(moved.get("en"), int) and moved["en"] < old["en"]):  # type: ignore[operator]
             raise _Stop("move", "en_not_charged", {"en": [old.get("en"), moved.get("en")]})
         stray = [d for d in _deltas(before, after) if d["object"] != self.unit_object]
         if stray:
             raise _Stop("move", "other_units_changed", {"changes": stray[:4]})
-        self.record("move", tile=_tile(moved), en=[old["en"], moved["en"]])
+        self.record("move", tile=_tile(moved), en=[old["en"], moved["en"]],
+                    **({"range_source": "stop_byte"} if fallback else {}))
 
     async def attack_menu(self) -> None:
         self.current = "attack_menu"
@@ -545,7 +587,9 @@ class _Run:
                 menu = None
             trace.append({"menu": menu, "counter": unit and unit.get("counter_value"),
                           "unmoved": unit and unit.get("counted_as_unmoved"),
-                          "range": len(_reachable(state)), "presses": presses})
+                          "range": len(_reachable(state)), "presses": presses,
+                          # s2o/s2p: tells a leftover Move range from a displayed one (reads only)
+                          "screen": state.get("screen"), "windows": state.get("ui_windows")})
             acted = unit is not None and not unit.get("counted_as_unmoved") and (
                 unit.get("counter_value") == 0)
             # A Hit and Away pilot that did not move gets its Move / Standby menu even after a kill
@@ -567,7 +611,7 @@ class _Run:
                     return
                 if presses >= RESULT_PRESSES + DIALOGUE_PRESSES:
                     raise _Stop("result", "result_not_dismissed",
-                                {"presses": presses, "trace": trace[-8:]})
+                                {"presses": presses, "trace": trace})
                 if self.io.time_left() < DIALOGUE_RESERVE:
                     # m11live15: Heero's withdrawal dialogue after the kill outlasted the act.
                     # The unit still has its bonus step; the next plan_act settles the screen.
@@ -601,7 +645,7 @@ class _Run:
                 # stands still: Cross returns to the menu, Down + Circle choose Standby.
                 if standby:
                     raise _Stop("result", "post_attack_move_not_closed",
-                                {"presses": presses, "trace": trace[-8:]})
+                                {"presses": presses, "trace": trace})
                 await self.tap("cross")
                 await self.io.sleep(1.0)
                 await self.tap("down")
@@ -612,7 +656,7 @@ class _Run:
                 continue
             if presses >= RESULT_PRESSES:
                 raise _Stop("result", "result_not_dismissed",
-                            {"presses": presses, "trace": trace[-8:]})
+                            {"presses": presses, "trace": trace})
             await self.tap("circle")
             presses += 1
             await self.io.sleep(1.5)

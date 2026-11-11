@@ -37,6 +37,11 @@ only from a tile (its own included) that at most `max_foes_in_reach` foes reach,
 nearest; otherwise it moves to the free reachable tile with the fewest foes in reach, then farthest
 from the nearest foe, then cheaper, then lower (rule `retreat`), or stays (`retreat_stay`) when no
 tile beats its own. Without the move overlay the plan stays `no_target`.
+
+Stop-byte fallback (user, 10 Nov; docs/superpowers/specs/2026-11-10-stop-tile-move-range-design.md):
+when the Move window is up but the cost byte stayed empty, `act.stop_range` supplies the tiles.
+Their real cost is unknown, so such a unit only advances or retreats; it never attacks after that
+move.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -187,6 +192,13 @@ def _retreat(here: Tile, costs: Mapping[Tile, int], occupied: Collection[Tile],
             "expect": {"rule": "retreat", "threats": threats, "distance": -away}}
 
 
+def _sourced(plan: dict[str, object], stop_byte: bool) -> dict[str, object]:
+    """Mark a move built from the stop-byte range, so reports show which units used it."""
+    expect = plan.get("expect")
+    return ({**plan, "expect": {**expect, "range_source": "stop_byte"}}
+            if stop_byte and isinstance(expect, dict) else plan)
+
+
 def boss_objects(units: Sequence[Mapping[str, Any]], mech_names: Mapping[int, str],
                  names: Collection[str] = BOSS_NAMES,
                  factor: float = BOSS_HP_FACTOR) -> frozenset[int]:
@@ -246,13 +258,17 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
             raise _Unknown("foe_max_hp")
     occupied = {_tile(u) for u in units if _alive(u) and u.get("object") != unit_object}
     every = _reachable(state, here)
+    stop_byte = not every       # user, 10 Nov: the fallback range only ever moves a unit
+    if stop_byte:
+        every = {(x, y): c for x, y, c in act.stop_range(here, state, weapon_read.get("move"))}
     known = foe_reach or {}
     limit = policy.max_foes_in_reach
     costs = every if limit is None else {
         t: c for t, c in every.items() if _threats(t, foes, known) <= limit}
     held = (policy.hold_unspirited_turn_one and not is_spirited and not damaged
             and (turn is None or turn <= 1))
-    moves = sorted((t for t in costs if t != here and t not in occupied and not held),
+    moves = sorted((t for t in costs if t != here and t not in occupied and not held
+                    and not stop_byte),
                    key=lambda t: (_distance(here, t), t))
     steps: list[tuple[Tile, bool]] = [(here, False), *((t, True) for t in moves)]
     if damaged:     # its own tile is limited too, and the safest attack tile comes first
@@ -319,11 +335,11 @@ def _plan(state: Mapping[str, Any], weapon_read: Mapping[str, Any], policy: Poli
             "target_hp": foe["hp"]}
         return {"act": instruction, "expect": expect}
     if damaged:
-        return _retreat(here, every, occupied, foes, known, unit_object)
+        return _sourced(_retreat(here, every, occupied, foes, known, unit_object), stop_byte)
     if held:
         return _handover("held_turn_one")
     if policy.advance_when_no_target:
-        return _advance(here, costs, occupied, foes, unit_object)
+        return _sourced(_advance(here, costs, occupied, foes, unit_object), stop_byte)
     return _handover("no_target")
 
 

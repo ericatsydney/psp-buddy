@@ -2,6 +2,7 @@
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -358,6 +359,74 @@ def far_state(turn: int = 1, reachable: list[list[int]] | None = None) -> dict[s
     return s
 
 
+# Stop-byte fallback (user, 10 Nov): cost byte 12 empty, byte 2 marks where the unit can stop.
+def stop_marks(radius: int = 3) -> set[tuple[int, int]]:
+    return {(19 + dx, 5 + dy) for dx in range(-radius, radius + 1)
+            for dy in range(-radius, radius + 1) if 0 < abs(dx) + abs(dy) <= radius}
+
+
+def with_stop_byte(s: dict[str, Any], marks: set[tuple[int, int]] | None = None) -> dict[str, Any]:
+    marked = stop_marks() if marks is None else marks
+    s["reachable"] = []
+    s["screen"] = "move_range"
+    s["map"] = {"cost_rows": ["." * 30] * 30,
+                "stop_rows": ["".join("1" if (x, y) in marked else "." for x in range(30))
+                              for y in range(30)]}
+    return s
+
+
+def moving(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {**weapons(rows), "move": 3}
+
+
+def test_stop_byte_unit_advances_and_says_where_the_range_came_from() -> None:
+    result = plan_attack(with_stop_byte(far_state(turn=2)), moving(), SAFETY, DESTINY, turn=2)
+    assert "attack" not in attack(result) and tuple(attack(result)["move_to"]) in stop_marks()
+    assert result["expect"] == {"rule": "advance", "toward": NEAR_FOE, "distance": 14,
+                                "range_source": "stop_byte"}
+
+
+def test_stop_byte_unit_never_plans_an_attack_after_moving() -> None:
+    short = [weapon(4, "ArondightSword", 4500, 1, 3, p=True, en_cost=35)]
+    result = plan_attack(with_stop_byte(state()), moving(short), POLICY, DESTINY)
+    assert result == {"handover": True, "reason": "no_target"}
+    advance = plan_attack(with_stop_byte(state()), moving(short), SAFETY, DESTINY, turn=2)
+    assert "attack" not in attack(advance) and advance["expect"]["rule"] == "advance"
+
+
+def test_stop_byte_unit_still_attacks_from_its_own_tile() -> None:
+    result = plan_attack(with_stop_byte(state()), moving(), POLICY, DESTINY)
+    assert "move_to" not in attack(result) and "attack" in attack(result)
+    assert "range_source" not in result["expect"]
+
+
+def test_stop_byte_damaged_unit_retreats() -> None:
+    policy = parse_policy("move damaged units away from foes")
+    short = [weapon(0, "Saber", 2000, 1, 1, p=True)]
+    result = plan_attack(with_stop_byte(state(hp=100)), moving(short), policy, DESTINY)
+    assert result["expect"]["rule"] == "retreat" and result["expect"]["range_source"] == "stop_byte"
+    assert tuple(attack(result)["move_to"]) in stop_marks() and "attack" not in attack(result)
+
+
+def test_stop_byte_tiles_still_obey_the_foe_limit_and_the_turn_one_hold() -> None:
+    limited = replace(SAFETY, max_foes_in_reach=1)
+    every_tile = {FAR_FOE: 99, NEAR_FOE: 99}
+    assert plan_attack(with_stop_byte(far_state(turn=2)), moving(), limited, DESTINY, turn=2,
+                       foe_reach=every_tile) == {"handover": True, "reason": "no_target"}
+    assert plan_attack(with_stop_byte(far_state(turn=1)), moving(), SAFETY, DESTINY, turn=1) == {
+        "handover": True, "reason": "held_turn_one"}
+
+
+def test_stop_byte_is_ignored_without_the_move_window_or_a_valid_range() -> None:
+    closed = with_stop_byte(far_state(turn=2))
+    closed["screen"] = "no_menu"
+    too_far = with_stop_byte(far_state(turn=2), stop_marks() | {(19, 12)})
+    for s in (closed, too_far):
+        assert plan_attack(s, moving(), SAFETY, DESTINY, turn=2)["reason"] == "no_target"
+    assert plan_attack(with_stop_byte(far_state(turn=2)), weapons(), SAFETY, DESTINY,
+                       turn=2)["reason"] == "no_target"          # move stat unreadable
+
+
 def test_spirited_needs_learned_focus_or_sense() -> None:
     from psp_buddy.tactics import spirited
 
@@ -511,6 +580,8 @@ def test_foe_reach_is_move_plus_the_longest_weapon_a_moved_foe_can_use() -> None
     assert foe_reach_of(read) == 8                       # max(5 + 3, 7); MAP weapons ignored
     assert foe_reach_of({"move": 4, "weapons": []}) == 4
     assert foe_reach_of({"weapons": []}) is None          # move unreadable: unknown
+    # Effective move (11 Nov): a foe with Dash reaches by `move`, not the stored value.
+    assert foe_reach_of({"move": 8, "stored_move": 7, "weapons": []}) == 8
 
 
 # M16 (m16-i feedback, 3 Nov): strongest weapon above 10% foe HP; damaged units attack safely or

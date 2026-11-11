@@ -35,29 +35,35 @@ def check_dimensions(width: int, height: int) -> None:
 
 
 def decode_map(blob: bytes, width: int, height: int) -> dict[str, object]:
-    """Terrain class (cell byte 0) and move cost (cell byte 12) as one string per map row."""
+    """Terrain class (cell byte 0), move cost (byte 12) and the tiles a unit can stop on (byte 2,
+    s2m 10 Nov: filled in even when the cost byte stays empty) as one string per map row."""
     check_dimensions(width, height)
     if len(blob) != CELL_SIZE * width * height:
         raise ValueError("cell table has the wrong size")
     terrain_rows: list[str] = []
     cost_rows: list[str] = []
+    stop_rows: list[str] = []
     seen: set[int] = set()
     for y in range(height):
         terrain = ""
         cost = ""
+        stop = ""
         for x in range(width):
             base = CELL_SIZE * (y * width + x)
             terrain += _symbol(blob[base])
             cost += _symbol(blob[base + 12])
+            stop += _symbol(blob[base + 2])
             if blob[base]:
                 seen.add(blob[base])
         terrain_rows.append(terrain)
         cost_rows.append(cost)
+        stop_rows.append(stop)
     return {
         "width": width,
         "height": height,
         "terrain_rows": terrain_rows,
         "cost_rows": cost_rows,
+        "stop_rows": stop_rows,
         "terrain_classes": {_symbol(v): TERRAIN_CLASSES.get(v, "unknown") for v in sorted(seen)},
     }
 
@@ -73,6 +79,13 @@ def reachable_tiles(state: dict[str, object]) -> list[dict[str, int]]:
                 result.append({"x": x, "y": y, "cost": _DIGITS.index(symbol) if symbol in _DIGITS
                                else -1})
     return result
+
+
+def stop_tiles(state: dict[str, object]) -> list[tuple[int, int]]:
+    """Tiles marked by cell byte 2, as (x, y); meaningful only while a Move window is open."""
+    rows = state["stop_rows"]
+    assert isinstance(rows, list)
+    return [(x, y) for y, row in enumerate(rows) for x, symbol in enumerate(row) if symbol != "."]
 
 
 def cursor_address(pointer: bytes) -> int:

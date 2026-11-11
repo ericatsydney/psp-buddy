@@ -300,6 +300,177 @@ def test_stale_range_not_centred_on_the_unit_backs_out():
     assert sim.log[-2:] == ['cross', 'cross']
 
 
+def stop_map(tiles, size=14):
+    return {'cost_rows': ['.' * size] * size,
+            'stop_rows': [''.join('1' if (x, y) in tiles else '.' for x in range(size))
+                          for y in range(size)]}
+
+
+def stop_state(tiles, **changes):
+    return {'screen': 'move_range', 'reachable': [], 'map': stop_map(tiles), **changes}
+
+
+GOOD_STOP = {(5, 4), (6, 5), (5, 7)}
+
+
+def test_stop_range_gives_the_marked_tiles_with_their_distance():
+    assert sorted(act.stop_range([5, 5], stop_state(GOOD_STOP), 3)) == [
+        [5, 4, 1], [5, 7, 2], [6, 5, 1]]
+
+
+@pytest.mark.parametrize('state, move', [
+    (stop_state(GOOD_STOP, screen='no_menu'), 3),           # the Move window is not up
+    (stop_state(GOOD_STOP, screen=None), 3),
+    (stop_state(GOOD_STOP, reachable=[[5, 4, 1]]), 3),      # a costed range is never replaced
+    (stop_state(set()), 3),                                 # nothing marked
+    (stop_state(GOOD_STOP | {(5, 5)}), 3),                  # own tile marked
+    (stop_state(GOOD_STOP | {(5, 9)}), 3),                  # beyond the unit's move
+    (stop_state(GOOD_STOP), None),                          # move unreadable
+    (stop_state(GOOD_STOP), True),
+    (stop_state(GOOD_STOP), 0),
+    ({'screen': 'move_range', 'reachable': []}, 3),         # no map at all
+    ({'screen': 'move_range', 'reachable': [], 'map': {'cost_rows': ['.']}}, 3),
+])
+def test_stop_range_refuses_anything_it_cannot_trust(state, move):
+    assert act.stop_range([5, 5], state, move) == []
+
+
+class StopByteMixin:
+    """Move window up, cost byte 12 empty, byte 2 marks tiles within 3 (s2m, 10 Nov)."""
+
+    stop_marks = True
+    stop_move = 3
+
+    async def state(self):
+        answer = await super().state()
+        answer['reachable'] = []
+        if self.screen == 'move_range':
+            answer['screen'] = 'move_range'
+            ax, ay = self.acting['tile_x'], self.acting['tile_y']
+            marks = {(ax + dx, ay + dy) for dx in range(-3, 4) for dy in range(-3, 4)
+                     if self.stop_marks and 0 < abs(dx) + abs(dy) <= 3}
+            answer['map'] = stop_map({m for m in marks if 0 <= min(m) and max(m) < 40}, 40)
+        return answer
+
+    async def read_weapons(self, unit_object):
+        return {**await super().read_weapons(unit_object), 'move': self.stop_move}
+
+
+class StopByteGame(StopByteMixin, SimGame):
+    pass
+
+
+def move_stage(result):
+    return next(s['facts'] for s in result['stages'] if s['stage'] == 'move')
+
+
+def test_a_move_only_act_uses_the_stop_byte_range():
+    sim = StopByteGame()
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert result['ok'] is True
+    assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 7)
+    assert move_stage(result)['range_source'] == 'stop_byte'
+
+
+def test_a_destination_outside_the_stop_byte_range_is_refused_and_backed_out():
+    sim = StopByteGame()
+    sim.stop_move = 8                       # the range is valid; (5,10) is simply not marked
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 10]}, sim))
+    assert result['reason'] == 'destination_not_reachable' and sim.screen == 'map'
+
+
+def test_a_planned_attack_never_moves_on_the_stop_byte_range():
+    sim = StopByteGame()
+    result = asyncio.run(act.run_act({
+        'unit_object': 1000, 'move_to': [5, 7],
+        'attack': {'weapon': 'BeamRifle', 'slot': 3, 'target_object': 2000}}, sim))
+    assert result['reason'] == 'range_not_centered_on_unit' and sim.screen == 'map'
+    assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 5)
+
+
+def test_an_invalid_stop_byte_range_still_stops_at_the_move_stage():
+    sim = StopByteGame()
+    sim.stop_marks = False
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert result['reason'] == 'range_not_centered_on_unit' and sim.screen == 'map'
+
+
+def test_a_tile_the_game_refuses_stays_a_stop_without_backing_out():
+    # User, 10 Nov (D1): a refused stop-byte tile keeps today's stop, Move window open.
+    class Refuses(StopByteGame):
+        async def press(self, button, frames=2):
+            if self.screen == 'move_range' and button == 'circle':
+                self.log.append(button)
+                return
+            await super().press(button, frames)
+
+    sim = Refuses()
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert result['reason'] == 'move_not_confirmed' and sim.screen == 'move_range'
+    assert 'cross' not in sim.log
+
+
+def test_a_stop_byte_move_that_costs_no_en_is_still_a_move():
+    # The cost byte is empty for these units, so nothing shows that moving charges them EN.
+    class FreeMove(StopByteGame):
+        async def press(self, button, frames=2):
+            before = self.units[0]['en']
+            await super().press(button, frames)
+            self.units[0]['en'] = before
+
+    sim = FreeMove()
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert result['ok'] is True and sim.units[0]['tile_y'] == 7
+
+
+def test_an_unreadable_move_stat_backs_out_of_the_move_window():
+    class NoStat(StopByteGame):
+        async def read_weapons(self, unit_object):
+            if self.screen == 'move_range':
+                raise act.ActIOError('no answer')
+            return await super().read_weapons(unit_object)
+
+    sim = NoStat()
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert result['reason'] == 'range_not_centered_on_unit' and sim.screen == 'map'
+
+
+def test_a_costed_move_that_charges_no_en_still_stops():
+    class FreeMove(SimGame):
+        async def press(self, button, frames=2):
+            before = self.units[0]['en']
+            await super().press(button, frames)
+            self.units[0]['en'] = before
+
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, FreeMove()))
+    assert result['reason'] == 'en_not_charged'
+
+
+def test_a_costed_move_records_no_range_source():
+    sim = SimGame()
+    result = asyncio.run(act.run_act({'unit_object': 1000, 'move_to': [5, 7]}, sim))
+    assert 'range_source' not in move_stage(result)
+
+
+def test_the_post_attack_move_prompt_ignores_byte_2():
+    state = {**stop_state(GOOD_STOP), 'units': []}
+    assert act._post_attack_move(state, {'tile_x': 5, 'tile_y': 5}) is False
+
+
+def test_range_problems_names_each_reason_a_range_is_not_centred():
+    tile = [5, 5]
+    good = [[6, 5, 1], [7, 5, 2], [4, 5, 1]]
+    assert act.range_problems(tile, good) == [] and act.centered(tile, good)
+    assert act.range_problems(tile, []) == ['empty']
+    assert act.range_problems(tile, [*good, [5, 5, 2]]) == ['own_tile_in_range']
+    assert act.range_problems(tile, [[6, 5, 2], [7, 5, 3]]) == ['no_cost_1_tile']
+    assert act.range_problems(tile, [*good, [5, 7, 1]]) == ['cost_1_not_adjacent',
+                                                           'cost_below_distance']
+    assert act.range_problems(tile, [*good, [8, 5, 2]]) == ['cost_below_distance']
+    for bad in ([], [*good, [5, 5, 2]], [[6, 5, 2]], [*good, [8, 5, 2]]):
+        assert not act.centered(tile, bad)
+
+
 def test_cursor_walk_failure_backs_out_and_reports_the_stage():
     sim = SimGame(goto_fails=True)
     result = run(act.run_act(MOVE_ATTACK, sim, commit=True))
@@ -928,3 +1099,28 @@ def test_a_cursor_that_keeps_drifting_is_not_confirmed():
     assert result['ok'] is False and result['reason'] == 'cursor_not_on_destination'
     assert (sim.units[0]['tile_x'], sim.units[0]['tile_y']) == (5, 5)
     assert sim.screen == 'map'
+
+
+def test_the_result_trace_records_the_screen_and_windows_of_each_read():
+    # s2o/s2p (11 Nov): a leftover Move range could not be told from a real one without them.
+    class Windows(SimGame):
+        async def state(self):
+            state = await super().state()
+            return {**state, 'screen': 'no_menu', 'ui_windows': [0x08E4BD0C]}
+
+    sim = Windows(post_attack_move=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    trace = result['stages'][-1]['facts']['trace']
+    assert trace and all(e['screen'] == 'no_menu' and e['windows'] == [0x08E4BD0C] for e in trace)
+    plain = run(act.run_act(request_, SimGame(post_attack_move=True), commit=True))
+    assert all(e['screen'] is None and e['windows'] is None
+               for e in plain['stages'][-1]['facts']['trace'])
+
+
+def test_a_result_stop_keeps_its_whole_trace():
+    sim = SimGame(post_attack_move=True, standby_ignored=True)
+    request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
+    result = run(act.run_act(request_, sim, commit=True))
+    assert result['ok'] is False and len(result['facts']['trace']) > 8
+    assert result['facts']['trace'][0]['presses'] == 0

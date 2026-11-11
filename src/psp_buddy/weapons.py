@@ -9,6 +9,11 @@ Displayed max range adds the range bonus of the equipped parts: up to four 1-bas
 runtime +0x38 index the static parts table (verified: Destiny's Hi-SpecRadar gives the +1 seen on
 screen; part move bonuses match runtime move for five units). A Newtype-like pilot skill (id 34)
 at level 7+ can add range to some weapons, which is not modelled, so such units are flagged.
+
+`move` is the effective move (11 Nov, docs/research/2026-11-10-effective-move.md): the game's move
+function 0x0896A090 starts from runtime +0x15 (parts included) and adds +3 while effect mask 0x80 is
+set and, for Dash (pilot skill 21), +1, or +2 at will 130 or more. Two further bonuses there are not
+decoded (a table bonus that is 0 on every unit seen, and the general effect engine).
 """
 
 import struct
@@ -26,6 +31,12 @@ WEAPON_SLOTS = 21
 WEAPON_LIST_SIZE = 8 * WEAPON_SLOTS          # record pointers, then ammo-counter pointers
 PILOT_SKILLS_OFFSET = 0x8E
 PILOT_SKILL_PAIRS = 8
+PILOT_EFFECTS_OFFSET = 0x14                   # u16 active-effect mask (spirits.py reads it too)
+PILOT_WILL_OFFSET = 0x46                      # s16 will
+DASH_SKILL = 21
+DASH_WILL = 130
+MOVE_EFFECT_MASK = 0x80                       # effect id 10 -> bit number 8 (table 0x08C49858)
+MOVE_EFFECT_BONUS = 3
 NAME_MAX = 64
 AMMO_UNIT = 9                                 # the ammo routine subtracts 9 per normal shot
 POWER_PER_UPGRADE = 100
@@ -103,18 +114,43 @@ def decode_weapon_record(record: bytes, slot: int) -> dict[str, object]:
     }
 
 
-async def _pilot_skills(read: Reader, pilot: int) -> list[dict[str, int]] | None:
-    """Pilot skill (id, level) pairs; None when the unit has no readable pilot (auxiliary data)."""
+async def _pilot_runtime(read: Reader, pilot: int) -> int | None:
+    """The pilot runtime address; None when the unit has no readable pilot (auxiliary data)."""
     try:
         _pointer(pilot, 8, 4, "pilot descriptor")
-        pilot_runtime = struct.unpack_from("<I", await _read(read, pilot, 8), 4)[0]
-        address = _pointer(pilot_runtime + PILOT_SKILLS_OFFSET, 2 * PILOT_SKILL_PAIRS, 2,
-                           "pilot runtime")
+        runtime: int = struct.unpack_from("<I", await _read(read, pilot, 8), 4)[0]
+        _pointer(runtime + PILOT_EFFECTS_OFFSET, PILOT_WILL_OFFSET + 2 - PILOT_EFFECTS_OFFSET, 2,
+                 "pilot runtime")
+        _pointer(runtime + PILOT_SKILLS_OFFSET, 2 * PILOT_SKILL_PAIRS, 2, "pilot runtime")
     except ValueError:
         return None
-    pairs = await _read(read, address, 2 * PILOT_SKILL_PAIRS)
+    return runtime
+
+
+async def _pilot_skills(read: Reader, runtime: int | None) -> list[dict[str, int]] | None:
+    """Pilot skill (id, level) pairs; None without a readable pilot."""
+    if runtime is None:
+        return None
+    pairs = await _read(read, runtime + PILOT_SKILLS_OFFSET, 2 * PILOT_SKILL_PAIRS)
     return [{"id": pairs[i] & 0x3F, "level": pairs[i + 1]}
             for i in range(0, len(pairs), 2) if pairs[i] and pairs[i + 1]]
+
+
+async def _move_bonus(read: Reader, runtime: int | None,
+                      skills: list[dict[str, int]] | None) -> int:
+    """What the game adds to the stored move: +3 for effect 0x80, Dash +1 (+2 at will 130+).
+    Only the main pilot is read; the game ORs the crew's masks, so a sub-pilot's +3 is missed and
+    the move range check then refuses the unit (safe)."""
+    if runtime is None:
+        return 0
+    block = await _read(read, runtime + PILOT_EFFECTS_OFFSET,
+                        PILOT_WILL_OFFSET + 2 - PILOT_EFFECTS_OFFSET)
+    effects = struct.unpack_from("<H", block, 0)[0]
+    will = struct.unpack_from("<h", block, PILOT_WILL_OFFSET - PILOT_EFFECTS_OFFSET)[0]
+    bonus = MOVE_EFFECT_BONUS if effects & MOVE_EFFECT_MASK else 0
+    if any(skill["id"] == DASH_SKILL for skill in skills or []):
+        bonus += 2 if will >= DASH_WILL else 1
+    return bonus
 
 
 async def _parts(read: Reader, ids: bytes) -> tuple[list[dict[str, object]], int, int, int]:
@@ -165,7 +201,9 @@ async def read_unit_weapons(read: Reader, actor: int) -> dict[str, object]:
     # reported but not applied, rather than refusing the whole read.
     upgrade_raw = resources[0x1D]
     upgrade = upgrade_raw if upgrade_raw <= MAX_UPGRADE_LEVEL else 0
-    skills = await _pilot_skills(read, pilot)
+    pilot_runtime = await _pilot_runtime(read, pilot)
+    skills = await _pilot_skills(read, pilot_runtime)
+    move_bonus = await _move_bonus(read, pilot_runtime, skills)
     parts, range_bonus, part_power, conditional_power = await _parts(
         read, resources[PARTS_OFFSET:PARTS_OFFSET + PART_SLOTS])
     range_resolved = not any(skill["id"] == NEWTYPE_SKILL and skill["level"] >= NEWTYPE_RANGE_LEVEL
@@ -206,7 +244,9 @@ async def read_unit_weapons(read: Reader, actor: int) -> dict[str, object]:
         "max_hp": max_hp,
         "en": en,
         "max_en": max_en,
-        "move": resources[0x15],
+        "move": resources[0x15] + move_bonus,
+        "stored_move": resources[0x15],
+        "move_bonus": move_bonus,
         "upgrade_level_candidate": upgrade_raw,
         "pilot_skills": skills,
         "parts": parts,

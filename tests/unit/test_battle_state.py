@@ -8,11 +8,14 @@ from psp_buddy.battle_state import (
     decode_map,
     decode_turn,
     reachable_tiles,
+    stop_tiles,
 )
 
 
-def cells(width, height, terrain=None, cost=None):
+def cells(width, height, terrain=None, cost=None, stop=None):
     blob = bytearray(CELL_SIZE * width * height)
+    for (x, y), value in (stop or {}).items():
+        blob[CELL_SIZE * (y * width + x) + 2] = value
     for (x, y), value in (terrain or {}).items():
         blob[CELL_SIZE * (y * width + x)] = value
     for (x, y), value in (cost or {}).items():
@@ -27,6 +30,14 @@ def test_decode_map_terrain_and_cost_rows():
     assert state['terrain_rows'] == ['12..', '....', '...i']          # base-36, 0 -> '.'
     assert state['cost_rows'] == ['....', '.1c.', '....']
     assert state['terrain_classes'] == {'1': 'space', '2': 'asteroid', 'i': 'debris'}
+
+
+def test_stop_rows_come_from_cell_byte_2_and_list_the_marked_tiles():
+    # s2m (10 Nov): byte 2 marks where a unit can stop, even when cost byte 12 stays empty.
+    state = decode_map(cells(4, 3, stop={(1, 1): 1, (2, 1): 200, (0, 2): 3}), 4, 3)
+    assert state['stop_rows'] == ['....', '.1#.', '3...']
+    assert state['cost_rows'] == ['....'] * 3
+    assert stop_tiles(state) == [(1, 1), (2, 1), (0, 2)]
 
 
 def test_reachable_tiles_come_from_nonzero_costs():

@@ -15,14 +15,14 @@ import struct
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from typing import Any
 
-from .weapons import RAM_END, RAM_START
+from .weapons import PILOT_EFFECTS_OFFSET, RAM_END, RAM_START
 
 PILOT_BLOB_SIZE = 0x70
 MAX_SP_OFFSET = 0x24
 SP_OFFSET = 0x44
 LEVEL_OFFSET = 0x4E
 SPIRITS_OFFSET = 0x5C
-EFFECTS_OFFSET = 0x14
+EFFECTS_OFFSET = PILOT_EFFECTS_OFFSET
 # Sense = Flash 0x04 + Aim 0x40 (24 Oct live). Alert = Flash 0x04 (25 Oct live cast: SP 19 -> 4,
 # mask 0 -> 0x04). Invincible = the 鉄 bit 4 by the effect-strip order, not observed
 # (no ally has it).

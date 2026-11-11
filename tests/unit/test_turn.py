@@ -71,7 +71,7 @@ def test_fired_unit_drops_out_because_its_counter_is_spent() -> None:
 
 
 @pytest.mark.parametrize("reason", ["no_target", "retreat_needed", "unit_not_ready",
-                                    "unit_not_ally"])
+                                    "unit_not_ally", "move_range_unreadable"])
 def test_handover_reasons_that_skip(reason: str) -> None:
     log = TurnLog()
     assert log.record(1, {"ok": False, "phase": "handover", "reason": reason}) == "skipped"
@@ -223,3 +223,46 @@ def test_retreat_stay_is_a_skip_and_a_retreat_is_a_standby() -> None:
     assert log.record(2, retreat) == "standby" and log.entries[-1]["reason"] == "retreat"
     assert log.record(3, {**retreat, "standby": False}) == "stop"
     assert log.stopped == "retreat_standby_failed"
+
+
+def test_a_fallback_move_records_its_range_source_and_a_normal_one_does_not() -> None:
+    # The stop-byte spec's live check needs the source in the saved report (s2o had none).
+    log = TurnLog()
+    plan = {"act": {"unit_object": 2, "move_to": [3, 4]},
+            "expect": {"rule": "advance", "toward": 9, "distance": 3, "range_source": "stop_byte"}}
+    advanced = {"ok": True, "phase": "advanced", "moved": True, "standby": True, "plan": plan}
+    assert log.record(2, advanced) == "standby"
+    assert log.entries[-1]["range_source"] == "stop_byte"
+    plain = {"rule": "advance", "toward": 9, "distance": 3}
+    normal = {**advanced, "plan": {**plan, "expect": plain}}
+    log.record(3, normal)
+    assert "range_source" not in log.entries[-1]
+    log.record(4, {"ok": False, "phase": "handover", "reason": "no_target"})
+    assert "range_source" not in log.entries[-1]
+
+
+def test_a_fallback_taken_by_act_alone_is_recorded_from_its_move_stage() -> None:
+    # Planning saw a costed range, but at the Move stage act fell back to the stop byte.
+    log = TurnLog()
+    result = {"ok": True, "phase": "advanced", "moved": True, "standby": True,
+              "plan": {"act": {"unit_object": 2, "move_to": [3, 4]},
+                       "expect": {"rule": "advance", "toward": 9, "distance": 3}},
+              "outcome": {"stages": [{"stage": "select", "facts": {}},
+                                     {"stage": "move", "facts": {"tile": [3, 4],
+                                                                 "range_source": "stop_byte"}}]}}
+    log.record(2, result)
+    assert log.entries[-1]["range_source"] == "stop_byte"
+
+
+def test_an_act_stop_keeps_its_facts_in_the_turn_entry() -> None:
+    # s2j, s2o, s2p: the stop's trace was only in the mailbox, never in the saved report.
+    log = TurnLog()
+    facts = {"presses": 0, "trace": [{"range": 142, "screen": "no_menu"}]}
+    failed = {"ok": False, "phase": "failed", "moved": False,
+              "plan": {"act": {"unit_object": 5, "attack": {"weapon": "Gun", "target_object": 9}}},
+              "outcome": {"ok": False, "stage": "result", "reason": "post_attack_move_not_closed",
+                          "facts": facts, "stages": []}}
+    assert log.record(5, failed) == "stop"
+    assert log.entries[-1]["stop_facts"] == facts
+    log.record(6, {"ok": False, "phase": "handover", "reason": "no_target"})
+    assert "stop_facts" not in log.entries[-1]

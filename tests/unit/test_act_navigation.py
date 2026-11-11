@@ -369,6 +369,24 @@ def test_turn_next_is_a_known_mailbox_operation_and_budgets_fit_a_turn():
     assert info_navigation.MAX_ACTS == 40 and info_navigation.MAX_ACT_PRESSES == 1000
 
 
+def test_plan_act_logs_rejected_ranges_in_the_evidence_folder(owned, tmp_path, monkeypatch):
+    from psp_buddy import plan_act
+    seen = {}
+
+    async def fake(*_args, **kwargs):
+        seen.update(kwargs)
+        return {'ok': False, 'phase': 'handover', 'reason': 'no_target', 'moved': False}
+
+    monkeypatch.setattr(plan_act, 'plan_and_act', fake)
+    service, _adapter, frame = make(owned, tmp_path, plan_sim())
+
+    async def scenario():
+        await service.execute('turn_next', {'sequence': 1})
+        await service.execute('plan_act', frame(sequence=2, policy='', **request()))
+    asyncio.run(scenario())
+    assert seen['range_log'] == tmp_path / 'evidence' / 'rejected-ranges.jsonl'
+
+
 def test_a_simulated_turn_runs_to_done_and_writes_the_report(owned, tmp_path):
     import json
     sim = plan_sim()

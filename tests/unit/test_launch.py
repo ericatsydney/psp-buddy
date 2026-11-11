@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from psp_buddy import retention
 from psp_buddy.backup import BackupGate
 from psp_buddy.config import RunConfig
 from psp_buddy.launch import ConnectionNotReady, Launcher, ProcessIdentity
@@ -325,9 +326,14 @@ def test_owned_other_network_address_rejected(prepared_env):
     with pytest.raises(ValueError, match='listener'):
         session.claim_connection()
 
-def test_prepare_prunes_old_archives_and_working_copies(prepared_env, tmp_path):
+def test_prepare_prunes_old_cycles_and_keeps_every_archive(prepared_env, tmp_path):
     from dataclasses import replace
     launcher, config, system, inspector, process = prepared_env
+    config = replace(config, backup_root=tmp_path / 'store' / 'verified-snapshots')
+    portable = [tmp_path / 'store' / f'portable-memstick-2020010{d}T000000Z' for d in range(1, 7)]
+    for backup in portable:
+        backup.mkdir(parents=True)
+        (backup / 'manifest.json').write_text('[{"verified": true}]')
     runtime = tmp_path / 'runtime'
     first = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
                              system_root=system, runtime_root=runtime)
@@ -337,13 +343,23 @@ def test_prepare_prunes_old_archives_and_working_copies(prepared_env, tmp_path):
     for _ in range(7):
         prepared = launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst',
                                     system_root=active / 'SYSTEM', runtime_root=runtime)
-    assert len(list(tmp_path.glob('runtime-archive-*'))) == 5
-    trials = sorted(p for p in config.backup_root.iterdir() if (p / 'manifest.json').exists())
-    assert len(trials) == 8
-    assert [t for t in trials if (t / 'working').exists()] == trials[-5:]
-    assert all((t / 'snapshot').is_dir() for t in trials)
+    assert len(list(tmp_path.glob('runtime-archive-*'))) == 7
+    trials = sorted(config.backup_root.iterdir())
+    assert len(trials) == 5
+    assert all((t / 'working').is_dir() and (t / 'snapshot').is_dir() for t in trials)
     assert prepared.receipt.snapshot_root.parent == trials[-1]
     assert launcher.last_prune is not None and launcher.last_prune.failed == ()
+    assert [p.exists() for p in portable] == [False] + [True] * 5
+
+
+def test_prepare_leaves_siblings_of_an_unnamed_backup_root(prepared_env, tmp_path):
+    launcher, config, system, inspector, process = prepared_env
+    sibling = config.backup_root.parent / 'portable-memstick-20200101T000000Z'
+    sibling.mkdir()
+    launcher.prepare(config, state_filename='ULJS00460_1.01_1.ppst', system_root=system,
+                     runtime_root=tmp_path / 'runtime')
+    assert sibling.is_dir()
+    assert launcher.last_prune == retention.PruneResult()
 
 
 def test_static_runtime_reuses_paths_and_preserves_previous_trial(prepared_env, tmp_path):
