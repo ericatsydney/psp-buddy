@@ -74,7 +74,7 @@ Phase 1 changes no press. A state without `screen` or `ui_windows` records `None
    report shows the windows for the first attack's Move display and for the stop. Originals unchanged.
 4. Phase 2 proposal written from that evidence, with the rule, its tests and its own live check.
 
-## Phase 1 result and Phase 2 proposal (s2q, 11 Nov) — awaiting approval
+## Phase 1 result and Phase 2 rule (s2q, 11 Nov) — approved by the user, built 11 Nov
 
 Windows seen in Wing Zero's three result traces (`s2q-run-20261111T094544Z/navigation-mailbox`):
 
@@ -95,6 +95,10 @@ Proposed rule for `act.result`, when a state carries `ui_windows` (otherwise tod
 3. after Standby, no window open and the unit not yet shown as acted: one Circle per read, within
    the existing `RESULT_PRESSES` limit, instead of polling only.
 Byte 2 stays out of `_post_attack_move`. Live check: Wing Zero's 2nd attack without a kill.
+
+As built (`act.result`, `act._windows`): rule 2 applies only to a pilot read as having Hit and Away
+(skill 20), so a Command window seen for any other pilot is never answered blindly. Offline tests
+only; not yet run live.
 
 ## Conflict review
 

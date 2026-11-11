@@ -1103,16 +1103,16 @@ def test_a_cursor_that_keeps_drifting_is_not_confirmed():
 
 def test_the_result_trace_records_the_screen_and_windows_of_each_read():
     # s2o/s2p (11 Nov): a leftover Move range could not be told from a real one without them.
-    class Windows(SimGame):
+    class Named(WindowGame):
         async def state(self):
-            state = await super().state()
-            return {**state, 'screen': 'no_menu', 'ui_windows': [0x08E4BD0C]}
+            return {**await super().state(), 'screen': 'unknown'}
 
-    sim = Windows(post_attack_move=True)
+    sim = Named(post_attack_move=True)
     request_ = instruction(attack={'weapon': 'BeamRifle', 'target_object': 2000})
     result = run(act.run_act(request_, sim, commit=True))
     trace = result['stages'][-1]['facts']['trace']
-    assert trace and all(e['screen'] == 'no_menu' and e['windows'] == [0x08E4BD0C] for e in trace)
+    assert trace and all(e['screen'] == 'unknown' for e in trace)
+    assert [e['windows'] for e in trace][:2] == [[], [COMMAND_W]]
     plain = run(act.run_act(request_, SimGame(post_attack_move=True), commit=True))
     assert all(e['screen'] is None and e['windows'] is None
                for e in plain['stages'][-1]['facts']['trace'])
@@ -1124,3 +1124,88 @@ def test_a_result_stop_keeps_its_whole_trace():
     result = run(act.run_act(request_, sim, commit=True))
     assert result['ok'] is False and len(result['facts']['trace']) > 8
     assert result['facts']['trace'][0]['presses'] == 0
+
+
+# Window rule (s2q, 11 Nov): Command alone = Move / Standby menu; Command + range = Move shown;
+# nothing = a result page; root = map. A range left in the cells has no range window.
+ROOT_W, COMMAND_W, RANGE_W = 0x08E4BD0C, 0x08E4BDDC, 0x08E4BF6C
+
+
+class WindowGame(SimGame):
+    """SimGame with the UI window list; `leftover` keeps a centred range in the cells throughout,
+    `page_after_standby` shows one more result page after Standby (no kill)."""
+    WINDOWS = {'ha_menu': [COMMAND_W], 'post_move': [COMMAND_W, RANGE_W], 'result': [],
+               'result2': [], 'map': [ROOT_W]}
+
+    async def press(self, button, frames=2):
+        if self.screen == 'result2':
+            self.log.append(button)
+            if button == 'circle':
+                self.acting.update(counter_value=0, counted_as_unmoved=False)
+                self.screen = 'map'
+            return
+        before = self.screen
+        await super().press(button, frames)
+        if (before == 'ha_menu' and self.screen == 'map'
+                and self.flags.get('page_after_standby')):
+            self.acting.update(counter_value=1, counted_as_unmoved=True)
+            self.screen = 'result2'
+
+    async def state(self):
+        state = await super().state()
+        if self.flags.get('leftover') and self.acting:
+            ax, ay = self.acting['tile_x'], self.acting['tile_y']
+            state['reachable'] = [[ax + dx, ay + dy, 1]
+                                  for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+        windows = self.WINDOWS.get(self.screen)
+        return state if windows is None else {**state, 'ui_windows': list(windows)}
+
+
+ATTACK = {'weapon': 'BeamRifle', 'target_object': 2000}
+
+
+def test_a_leftover_range_under_a_result_page_is_dismissed_not_answered_as_a_move():
+    sim = WindowGame(leftover=True)
+    result = run(act.run_act(instruction(attack=ATTACK), sim, commit=True))
+    assert result['ok'] is True and 'cross' not in sim.log
+    assert result['stages'][-1]['facts']['post_attack_standby'] is False
+
+
+def test_the_move_standby_menu_is_known_by_its_window_and_answered_with_standby():
+    sim = WindowGame(post_attack_move=True, ha_direct=True, leftover=True, ha_skill=True)
+    result = run(act.run_act(instruction(attack=ATTACK), sim, commit=True))
+    assert result['ok'] is True and 'cross' not in sim.log
+    assert result['stages'][-1]['facts']['post_attack_standby'] is True
+    assert sim.screen == 'map'
+
+
+def test_a_result_page_after_standby_is_dismissed_with_circle():
+    # s2o / s2p: Wing Zero's second attack did not kill; the Get Result page waited for a Circle.
+    sim = WindowGame(post_attack_move=True, ha_direct=True, leftover=True, ha_skill=True,
+                     page_after_standby=True)
+    result = run(act.run_act(instruction(attack=ATTACK), sim, commit=True))
+    assert result['ok'] is True and sim.screen == 'map'
+    assert result['stages'][-1]['facts']['post_attack_standby'] is True
+
+
+def test_a_range_with_its_window_open_is_still_closed_with_cross_then_standby():
+    class RangeUp(WindowGame):                     # the Move range is already displayed
+        async def state(self):
+            state = await super().state()
+            if self.screen == 'ha_menu' and not self.flags.get('seen'):
+                self.flags['seen'] = True
+                self.screen = 'post_move'
+                return await super().state()
+            return state
+
+    sim = RangeUp(post_attack_move=True, ha_direct=True)
+    result = run(act.run_act(instruction(attack=ATTACK), sim, commit=True))
+    assert result['ok'] is True and sim.log.count('cross') == 1
+    assert result['stages'][-1]['facts']['post_attack_standby'] is True
+
+
+def test_a_command_window_alone_is_not_answered_for_a_pilot_without_hit_and_away():
+    sim = WindowGame(post_attack_move=True, ha_direct=True, leftover=True)
+    run(act.run_act(instruction(attack=ATTACK), sim, commit=True))
+    after_start = sim.log[sim.log.index('start') + 1:]
+    assert after_start[:1] != ['down']

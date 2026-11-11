@@ -115,8 +115,11 @@ or hands over cleanly with no manual steps.
   Phase 1 built 11 Nov, offline tests only, uncommitted: result trace gains `screen` and `windows`,
   stops keep the whole trace, turn entries keep `stop_facts`.
   [spec](superpowers/specs/2026-11-11-stale-post-attack-range-design.md). Next: live run s2q on the
-  13:27 save: s2q run 11 Nov. Windows recorded (table and Phase 2 proposal in the spec, awaiting the
-  user's approval). The stop did not recur because the 2nd attack killed its target this time.
+  13:27 save: s2q run 11 Nov. Windows recorded (table and rule in the spec). Phase 2 rule approved
+  and built 11 Nov (uncommitted, offline tests only; Phase 1 is in commit fd3ff46). Live proof needs
+  Wing Zero's 2nd attack without a kill. The stop did not recur because the 2nd attack killed its target this time.
+- s2r (11 Nov): PPSSPP crashed about a minute after start-up (known fault 0x864414), no turn played.
+  s2s retry stopped at the user's request before any result. Originals unchanged after both.
 - [ ] s2q ended `ally_destroyed` in turn 3: Li-Brasta B (149305992) lost, the first ally lost on this
   save. 22 non-boss foes destroyed, 20 left. Cause not investigated; s2p on the same save and code
   path lost none. Originals unchanged (OneDrive 56/56, portable 55/55). Evidence:

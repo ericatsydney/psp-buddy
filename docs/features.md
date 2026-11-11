@@ -68,6 +68,10 @@ Status: **live** = proven in a protected live run; **offline** = tests only;
   advances or retreats, never attacks after that move; if neither byte works it is skipped
   `move_range_unreadable`. [spec](superpowers/specs/2026-11-10-stop-tile-move-range-design.md)
 - Continue (kill bonus step) and Hit&Away menus are handled.
+- Post-attack windows (decision 11 Nov, offline tests; retires the 4 Nov Get Result acceptance once
+  live): a Move range counts only with the range window open; Command window alone on a Hit and
+  Away pilot is the Move / Standby menu (Standby); a windowless page after Standby gets Circle.
+  [spec](superpowers/specs/2026-11-11-stale-post-attack-range-design.md)
 - Spirits: Sense then Focus cast before attacks when the policy says so; cast verified
   by SP drop + effect mask; multi-pilot mechs pick the first pilot; an unknown menu
   layout skips the cast for that mech for the run.

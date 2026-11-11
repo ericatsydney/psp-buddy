@@ -11,7 +11,7 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
-from . import battle_state, targets
+from . import battle_state, screen, targets
 
 ALLY_GROUP = 0
 # Debug only: hold a failed stage on screen this long before backing out (to take a screenshot).
@@ -592,13 +592,20 @@ class _Run:
                           "screen": state.get("screen"), "windows": state.get("ui_windows")})
             acted = unit is not None and not unit.get("counted_as_unmoved") and (
                 unit.get("counter_value") == 0)
+            # Window rule (s2q, 11 Nov): a range left in the cells by an earlier Move display has no
+            # range window; Command alone is the Move / Standby menu; no window is a result page.
+            windows = _windows(state)
+            shown = (unit is not None and _post_attack_move(state, unit)
+                     and (windows is None or screen.RANGE in windows))
+            menu_up = (self.hit_and_away and windows == {screen.COMMAND} and not standby
+                       and unit is not None and bool(unit.get("counted_as_unmoved")))
             # A Hit and Away pilot that did not move gets its Move / Standby menu even after a kill
             # (31 Oct live, m14s33g/m: Wing Gundam Zero). A Circle there chooses Move, and a range
             # centred on the unit is that menu's Move, not the map: the cursor walks inside it.
             # After Standby come the kill's result pages and then Continue's step, with that range
             # still in memory, so from then on the Continue path decides.
-            ha_range = (self.hit_and_away and self.move_to is None and not standby
-                        and unit is not None and _post_attack_move(state, unit))
+            ha_range = menu_up or (self.hit_and_away and self.move_to is None and not standby
+                                   and shown)
             if (self.continue_attack and unit is not None and unit.get("counted_as_unmoved")
                     and self._target_destroyed(state) and not ha_range):
                 # Continue Attack (24 Oct live, m11live7): result pages, then the plain map with
@@ -623,11 +630,11 @@ class _Run:
                 presses += 1
                 await self.io.sleep(1.5)
                 continue
-            if acted and (standby or not _post_attack_move(state, unit)):  # type: ignore[arg-type]
+            if acted and (standby or not shown):
                 # After Standby the move range can stay in memory for a moment (22 Oct live).
                 break
-            if (self.hit_and_away and not standby and unit is not None
-                    and unit.get("counted_as_unmoved") and not _post_attack_move(state, unit)):
+            if menu_up or (windows is None and self.hit_and_away and not standby
+                           and unit is not None and unit.get("counted_as_unmoved") and not shown):
                 # The Move / Standby menu is already up with Move highlighted: choose Standby.
                 await self.tap("down")
                 await self.io.sleep(0.5)
@@ -635,11 +642,17 @@ class _Run:
                 standby = True
                 await self.io.sleep(1.5)
                 continue
+            if standby and windows == set() and presses < RESULT_PRESSES:
+                # s2o / s2p: with no kill, a Get Result page follows Standby and waits for Circle.
+                await self.tap("circle")
+                presses += 1
+                await self.io.sleep(1.5)
+                continue
             if standby and polls < STANDBY_POLLS:
                 polls += 1
                 await self.io.sleep(1.0)
                 continue
-            if unit is not None and _post_attack_move(state, unit):
+            if shown:
                 # Units with Hit and Away get a "Move / Standby" menu after the attack (22 Oct
                 # live: Arios Gundam). Dismissing presses chose Move and showed its range; the MVP
                 # stands still: Cross returns to the menu, Down + Circle choose Standby.
@@ -715,6 +728,15 @@ def _destroyed(state: Mapping[str, object], target: object) -> bool:
         return False
     found = [u for u in units if isinstance(u, Mapping) and u.get("object") == target]
     return not found or not _alive(found[0])
+
+
+def _windows(state: Mapping[str, object]) -> set[int] | None:
+    """The open UI windows (ambient one left out), or None when the state has no list. Seen in
+    s2q: the map is {root}, a result page is empty, the Move / Standby menu is {Command}."""
+    raw = state.get("ui_windows")
+    if not isinstance(raw, list):
+        return None
+    return set(raw) - screen.AMBIENT
 
 
 def _post_attack_move(state: Mapping[str, object], unit: Mapping[str, object]) -> bool:
